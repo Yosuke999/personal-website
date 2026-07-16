@@ -345,6 +345,9 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const fileRef = useRef<HTMLInputElement>(null);
+  const uploadedStoryImageCount = targetType === "story" ? comments.filter((comment) => comment.authorId === user.id).reduce((total, comment) => total + comment.images.length, 0) : 0;
+  const selectedImageCount = targetType === "story" ? uploadedStoryImageCount + files.length : files.length;
+  const imageLimitReached = selectedImageCount >= 2;
 
   const loadComments = useCallback(async () => {
     const supabase = createSupabaseBrowserClient();
@@ -378,8 +381,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
 
   function chooseFiles(list: FileList | null) {
     if (!list) return;
-    const existingStoryImages = targetType === "story" ? comments.filter((comment) => comment.authorId === user.id).reduce((total, comment) => total + comment.images.length, 0) : 0;
-    const remaining = targetType === "story" ? Math.max(0, 2 - existingStoryImages - files.length) : Math.max(0, 2 - files.length);
+    const remaining = targetType === "story" ? Math.max(0, 2 - uploadedStoryImageCount - files.length) : Math.max(0, 2 - files.length);
     const selected = Array.from(list).filter((file) => file.size <= 5 * 1024 * 1024).slice(0, remaining);
     setFiles((current) => [...current, ...selected.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
     if (selected.length !== list.length) setMessage(targetType === "story" ? "每位用户在每篇故事下累计最多上传2张图片，单张不超过5MB。" : "每条留言最多上传2张图片，单张不超过5MB。");
@@ -405,7 +407,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     await loadComments();
   }
 
-  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={comment.avatarUrl} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={image.url} alt="留言图片" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy}><ImagePlus size={17} />图片 <small>{files.length}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
+  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={comment.avatarUrl} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={image.url} alt="留言图片" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy || imageLimitReached}><ImagePlus size={17} />图片 <small>{selectedImageCount}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
 }
 
 function StoryLikeButton({ storyId, userId }: { storyId: string; userId?: string }) {
