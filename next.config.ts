@@ -5,6 +5,7 @@ const nextConfig: NextConfig = {
   async rewrites() {
     return [
       { source: "/login", destination: "/" },
+      { source: "/reset-password", destination: "/" },
       { source: "/map", destination: "/" },
       { source: "/wall", destination: "/" },
       { source: "/notifications", destination: "/" },

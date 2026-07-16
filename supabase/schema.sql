@@ -118,6 +118,10 @@ create or replace function public.is_admin()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists(select 1 from public.profiles where id = auth.uid() and role = 'admin' and not is_blocked); $$;
 
+create or replace function public.is_active_member()
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists(select 1 from public.profiles where id = auth.uid() and not is_blocked); $$;
+
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public
 as $$ begin insert into public.profiles(id, display_name) values(new.id, coalesce(new.raw_user_meta_data->>'display_name', split_part(new.email, '@', 1))); return new; end; $$;
@@ -174,34 +178,33 @@ alter table public.comment_images enable row level security;
 alter table public.story_likes enable row level security;
 alter table public.notifications enable row level security;
 
-create policy "members read profiles" on public.profiles for select to authenticated using (not is_blocked or id = auth.uid() or public.is_admin());
+create policy "members read profiles" on public.profiles for select to authenticated using ((public.is_active_member() and not is_blocked) or id = auth.uid() or public.is_admin());
 create policy "users update own profile" on public.profiles for update to authenticated using (id = auth.uid() and not is_blocked) with check (id = auth.uid());
 create policy "admin manages profiles" on public.profiles for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
-create policy "members read provinces" on public.provinces for select to authenticated using (true);
+create policy "members read provinces" on public.provinces for select to authenticated using (public.is_active_member());
 create policy "admin manages provinces" on public.provinces for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy "members read published stories" on public.stories for select to authenticated using (is_published or public.is_admin());
+create policy "members read published stories" on public.stories for select to authenticated using ((public.is_active_member() and is_published) or public.is_admin());
 create policy "admin manages stories" on public.stories for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy "members read story photos" on public.story_photos for select to authenticated using (true);
+create policy "members read story photos" on public.story_photos for select to authenticated using (public.is_admin() or (public.is_active_member() and exists(select 1 from public.stories s where s.id = story_id and s.is_published)));
 create policy "admin manages story photos" on public.story_photos for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy "members read ratings" on public.place_ratings for select to authenticated using (true);
+create policy "members read ratings" on public.place_ratings for select to authenticated using (public.is_admin() or (public.is_active_member() and exists(select 1 from public.stories s where s.id = story_id and s.is_published)));
 create policy "admin manages ratings" on public.place_ratings for all to authenticated using (public.is_admin()) with check (public.is_admin());
-create policy "members read wishes" on public.travel_wishes for select to authenticated using (true);
+create policy "members read wishes" on public.travel_wishes for select to authenticated using (public.is_active_member());
 create policy "admin manages wishes" on public.travel_wishes for all to authenticated using (public.is_admin()) with check (public.is_admin());
 
-create policy "members read comments" on public.comments for select to authenticated using (true);
-create policy "members create comments" on public.comments for insert to authenticated with check (author_id = auth.uid() and not exists(select 1 from public.profiles p where p.id = auth.uid() and p.is_blocked));
-create policy "owner or admin updates comments" on public.comments for update to authenticated using (author_id = auth.uid() or public.is_admin()) with check (author_id = auth.uid() or public.is_admin());
-create policy "owner or admin deletes comments" on public.comments for delete to authenticated using (author_id = auth.uid() or public.is_admin());
-create policy "members read comment images" on public.comment_images for select to authenticated using (true);
-create policy "owner adds comment images" on public.comment_images for insert to authenticated with check (owner_id = auth.uid());
-create policy "owner or admin deletes comment images" on public.comment_images for delete to authenticated using (owner_id = auth.uid() or public.is_admin());
-create policy "members read likes" on public.story_likes for select to authenticated using (true);
-create policy "members add own likes" on public.story_likes for insert to authenticated with check (user_id = auth.uid());
-create policy "members remove own likes" on public.story_likes for delete to authenticated using (user_id = auth.uid());
-create policy "users read own notifications" on public.notifications for select to authenticated using (recipient_id = auth.uid());
-create policy "users update own notifications" on public.notifications for update to authenticated using (recipient_id = auth.uid()) with check (recipient_id = auth.uid());
-create policy "system or admin creates notifications" on public.notifications for insert to authenticated with check (public.is_admin() or actor_id = auth.uid());
+create policy "members read comments" on public.comments for select to authenticated using (public.is_active_member());
+create policy "members create comments" on public.comments for insert to authenticated with check (author_id = auth.uid() and public.is_active_member());
+create policy "owner or admin updates comments" on public.comments for update to authenticated using ((author_id = auth.uid() and public.is_active_member()) or public.is_admin()) with check ((author_id = auth.uid() and public.is_active_member()) or public.is_admin());
+create policy "owner or admin deletes comments" on public.comments for delete to authenticated using ((author_id = auth.uid() and public.is_active_member()) or public.is_admin());
+create policy "members read comment images" on public.comment_images for select to authenticated using (public.is_active_member());
+create policy "owner adds comment images" on public.comment_images for insert to authenticated with check (owner_id = auth.uid() and public.is_active_member());
+create policy "owner or admin deletes comment images" on public.comment_images for delete to authenticated using ((owner_id = auth.uid() and public.is_active_member()) or public.is_admin());
+create policy "members read likes" on public.story_likes for select to authenticated using (public.is_active_member() and exists(select 1 from public.stories s where s.id = story_id and s.is_published));
+create policy "members add own likes" on public.story_likes for insert to authenticated with check (user_id = auth.uid() and public.is_active_member() and exists(select 1 from public.stories s where s.id = story_id and s.is_published));
+create policy "members remove own likes" on public.story_likes for delete to authenticated using (user_id = auth.uid() and public.is_active_member());
+create policy "users read own notifications" on public.notifications for select to authenticated using (recipient_id = auth.uid() and public.is_active_member());
+create policy "users update own notifications" on public.notifications for update to authenticated using (recipient_id = auth.uid() and public.is_active_member()) with check (recipient_id = auth.uid() and public.is_active_member());
 
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
 values
@@ -210,11 +213,11 @@ values
   ('comment-media', 'comment-media', false, 5242880, array['image/jpeg','image/png','image/webp'])
 on conflict (id) do nothing;
 
-create policy "authenticated read private media" on storage.objects for select to authenticated using (bucket_id in ('avatars','travel-media','comment-media'));
-create policy "users upload own avatar" on storage.objects for insert to authenticated with check (bucket_id='avatars' and (storage.foldername(name))[1]=auth.uid()::text);
-create policy "users update own avatar" on storage.objects for update to authenticated using (bucket_id='avatars' and owner_id=auth.uid()::text);
-create policy "users upload comment media" on storage.objects for insert to authenticated with check (bucket_id='comment-media' and (storage.foldername(name))[1]=auth.uid()::text);
-create policy "users delete own comment media" on storage.objects for delete to authenticated using (bucket_id='comment-media' and owner_id=auth.uid()::text);
+create policy "authenticated read private media" on storage.objects for select to authenticated using (public.is_active_member() and (bucket_id in ('avatars','comment-media') or (bucket_id='travel-media' and (public.is_admin() or exists(select 1 from public.stories s where s.is_published and s.cover_path = name) or exists(select 1 from public.story_photos sp join public.stories s on s.id = sp.story_id where s.is_published and sp.storage_path = name)))));
+create policy "users upload own avatar" on storage.objects for insert to authenticated with check (public.is_active_member() and bucket_id='avatars' and (storage.foldername(name))[1]=auth.uid()::text);
+create policy "users update own avatar" on storage.objects for update to authenticated using (public.is_active_member() and bucket_id='avatars' and owner_id=auth.uid()::text);
+create policy "users upload comment media" on storage.objects for insert to authenticated with check (public.is_active_member() and bucket_id='comment-media' and (storage.foldername(name))[1]=auth.uid()::text);
+create policy "users delete own comment media" on storage.objects for delete to authenticated using (public.is_active_member() and bucket_id='comment-media' and owner_id=auth.uid()::text);
 create policy "admin manages travel media" on storage.objects for all to authenticated using (bucket_id='travel-media' and public.is_admin()) with check (bucket_id='travel-media' and public.is_admin());
 
 -- After your first signup, promote the owner once in SQL Editor:

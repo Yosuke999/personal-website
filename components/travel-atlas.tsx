@@ -49,6 +49,7 @@ const demoStats: AtlasStats = {
   stories: demoStories.length,
   photos: 24,
 };
+const emptyStats: AtlasStats = { visited: 0, planned: 0, stories: 0, photos: 0 };
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 
 const shortProvince = (name: string) => name.replace(/省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区/g, "");
@@ -62,7 +63,23 @@ function Brand({ compact = false }: { compact?: boolean }) {
   );
 }
 
-function AuthGate({ onEnter }: { onEnter: (name: string, admin?: boolean) => void }) {
+function getAuthErrorMessage(error: unknown) {
+  const raw = error instanceof Error ? error.message : String(error || "");
+  const lower = raw.toLowerCase();
+  if (raw.includes("no captcha_token_found")) return "人机验证已失效，请重新完成验证后再试。";
+  if (raw.includes("invalid-input-secret")) return "人机验证服务配置异常，请联系网站管理员。";
+  if (raw.includes("otp_expired") || raw.includes("Email link is invalid or has expired")) return "此链接已失效或已被使用，请重新申请一封邮件。";
+  if (lower.includes("token has expired") || lower.includes("token is invalid")) return "验证码无效或已过期，请重新申请。";
+  if (lower.includes("code verifier") || lower.includes("pkce")) return "请在申请重置邮件的同一浏览器中打开最新链接。";
+  if (lower.includes("invalid login credentials")) return "邮箱或密码不正确。";
+  if (lower.includes("email not confirmed")) return "邮箱尚未验证，请先打开验证邮件。";
+  if (lower.includes("email rate limit exceeded") || lower.includes("rate limit")) return "邮件发送过于频繁，请稍后再试。";
+  if (lower.includes("user already registered")) return "该邮箱已经注册，请直接登录。";
+  if (lower.includes("password should be")) return "密码强度不足，请至少使用 6 位字符。";
+  return raw || "操作失败，请稍后再试。";
+}
+
+function AuthGate({ onEnter, initialMessage = "" }: { onEnter: (name: string, admin?: boolean) => void; initialMessage?: string }) {
   const [mode, setMode] = useState<AuthMode>("login");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
@@ -78,19 +95,25 @@ function AuthGate({ onEnter }: { onEnter: (name: string, admin?: boolean) => voi
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY;
 
   useEffect(() => {
+    if (!initialMessage) return;
+    const task = window.setTimeout(() => setMessage(initialMessage), 0);
+    return () => window.clearTimeout(task);
+  }, [initialMessage]);
+
+  useEffect(() => {
     const api = (window as Window & { turnstile?: TurnstileApi }).turnstile;
     if (!turnstileSiteKey || !turnstileReady || !api || !turnstileHost.current || turnstileWidgetId.current) return;
     turnstileWidgetId.current = api.render(turnstileHost.current, {
       sitekey: turnstileSiteKey, theme: "dark", size: "flexible", language: "zh-cn",
       callback: (token: string) => { setCaptchaToken(token); setMessage(""); },
-      "expired-callback": () => setCaptchaToken(""),
+      "expired-callback": () => { setCaptchaToken(""); setMessage("人机验证已过期，请重新完成。 "); },
       "error-callback": () => { setCaptchaToken(""); setMessage("人机验证加载失败，请刷新后重试。"); },
     });
     return () => {
       if (turnstileWidgetId.current) api.remove(turnstileWidgetId.current);
       turnstileWidgetId.current = undefined;
     };
-  }, [turnstileReady, turnstileSiteKey]);
+  }, [mode, turnstileReady, turnstileSiteKey]);
 
   function resetCaptcha() {
     setCaptchaToken("");
@@ -98,17 +121,23 @@ function AuthGate({ onEnter }: { onEnter: (name: string, admin?: boolean) => voi
     if (api && turnstileWidgetId.current) api.reset(turnstileWidgetId.current);
   }
 
+  function switchMode(nextMode: AuthMode) {
+    setMode(nextMode);
+    setMessage("");
+    resetCaptcha();
+  }
+
   async function submit(event: React.FormEvent) {
     event.preventDefault();
     setBusy(true);
     setMessage("");
-    if (turnstileSiteKey && !captchaToken) {
-      setMessage("请先完成人机验证。");
+    if (mode === "register" && password !== confirmPassword) {
+      setMessage("两次输入的密码不一致。");
       setBusy(false);
       return;
     }
-    if (mode === "register" && password !== confirmPassword) {
-      setMessage("两次输入的密码不一致。");
+    if (turnstileSiteKey && !captchaToken) {
+      setMessage("请先完成人机验证。");
       setBusy(false);
       return;
     }
@@ -124,16 +153,16 @@ function AuthGate({ onEnter }: { onEnter: (name: string, admin?: boolean) => voi
         setMessage("验证邮件已发送，请完成邮箱验证后登录。 ");
         resetCaptcha();
       } else if (mode === "forgot") {
-        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}/`, captchaToken });
+        const { error } = await supabase.auth.resetPasswordForEmail(email, { redirectTo: `${location.origin}/reset-password`, captchaToken });
         if (error) throw error;
-        setMessage("重置密码邮件已发送。 ");
+        setMessage("重置邮件已发送，请只使用最新邮件中的确认按钮。 ");
         resetCaptcha();
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password, options: { captchaToken } });
         if (error) throw error;
       }
     } catch (error) {
-      setMessage(error instanceof Error ? error.message : "操作失败，请稍后再试。");
+      setMessage(getAuthErrorMessage(error));
       resetCaptcha();
     } finally {
       setBusy(false);
@@ -170,13 +199,72 @@ function AuthGate({ onEnter }: { onEnter: (name: string, admin?: boolean) => voi
           </button>
         </form>
         <div className="auth-switch">
-          {mode === "login" ? <><button onClick={() => setMode("forgot")}>忘记密码</button><span />还没有账号？<button onClick={() => setMode("register")}>立即注册</button></> : <button onClick={() => setMode("login")}><ArrowLeft size={14} />返回登录</button>}
+          {mode === "login" ? <><button onClick={() => switchMode("forgot")}>忘记密码</button><span />还没有账号？<button onClick={() => switchMode("register")}>立即注册</button></> : <button onClick={() => switchMode("login")}><ArrowLeft size={14} />返回登录</button>}
         </div>
         {!hasSupabaseEnv && <button className="demo-enter" onClick={() => onEnter("Yosuke", true)}><Sparkles size={15} />直接进入交互演示</button>}
       </section>
       <footer className="auth-footer"><span>PRIVATE BY DESIGN</span><span>© 2026 YOSUKE&apos;S ATLAS</span></footer>
     </main></>
   );
+}
+
+function PasswordRecoveryPage({ tokenHash, onTokenConsumed, onComplete, onCancel }: { tokenHash?: string; onTokenConsumed: () => void; onComplete: (message: string) => void; onCancel: () => Promise<void> }) {
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [verified, setVerified] = useState(!tokenHash);
+
+  async function verifyRecoveryLink() {
+    if (!tokenHash) return;
+    setBusy(true); setMessage("");
+    const supabase = createSupabaseBrowserClient();
+    const { error } = supabase ? await supabase.auth.verifyOtp({ token_hash: tokenHash, type: "recovery" }) : { error: new Error("Supabase 尚未连接") };
+    if (error) {
+      setMessage(getAuthErrorMessage(error));
+      setBusy(false);
+      return;
+    }
+    setVerified(true);
+    setBusy(false);
+    onTokenConsumed();
+    window.history.replaceState({}, "", "/reset-password");
+  }
+
+  async function savePassword(event: React.FormEvent) {
+    event.preventDefault();
+    if (password.length < 6) { setMessage("新密码至少需要 6 位字符。"); return; }
+    if (password !== confirmPassword) { setMessage("两次输入的新密码不一致。"); return; }
+    setBusy(true); setMessage("");
+    const supabase = createSupabaseBrowserClient();
+    const { error } = supabase ? await supabase.auth.updateUser({ password }) : { error: new Error("Supabase 尚未连接") };
+    if (error) {
+      setMessage(getAuthErrorMessage(error));
+      setBusy(false);
+      return;
+    }
+    await supabase?.auth.signOut();
+    window.history.replaceState({}, "", "/login");
+    onComplete("密码已重置，请使用新密码登录。 ");
+  }
+
+  return <main className="auth-page">
+    <div className="auth-noise" /><div className="auth-halo auth-halo-a" /><div className="auth-halo auth-halo-b" />
+    <header className="auth-header"><Brand /><span className="privacy-chip"><LockKeyhole size={13} />安全重置密码</span></header>
+    <section className="auth-story"><div className="eyebrow"><span />SECURE RECOVERY</div><h1>重新启程，<br /><em>从新密码开始。</em></h1><p>{verified ? <>恢复链接验证成功。<br />设置一个新的密码后即可重新登录。</> : <>为了防止邮件程序提前打开链接，<br />请亲自确认后再继续设置新密码。</>}</p></section>
+    <section className="auth-card glass-panel">
+      <div className="auth-card-top"><div><small>WELCOME BACK</small><h2>{verified ? "设置新密码" : "确认密码重置"}</h2></div><div className="auth-index">02</div></div>
+      {verified ? <form onSubmit={savePassword}>
+        <label className="password-label"><span>新密码<button type="button" onClick={() => setShowPassword((visible) => !visible)}>{showPassword ? "隐藏" : "显示"}</button></span><input required minLength={6} autoComplete="new-password" type={showPassword ? "text" : "password"} value={password} onChange={(event) => setPassword(event.target.value)} placeholder="至少 6 位字符" /></label>
+        <label>确认新密码<input required minLength={6} autoComplete="new-password" type={showPassword ? "text" : "password"} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} placeholder="再次输入新密码" /></label>
+        {message && <div className="form-message" role="status">{message}</div>}
+        <button className="primary-button auth-submit" disabled={busy} type="submit">{busy ? "正在保存…" : "保存新密码"}<ArrowRight size={17} /></button>
+      </form> : <div className="recovery-confirmation"><ShieldCheck size={30} /><p>点击下方按钮后才会验证这次重置请求。此操作只能完成一次。</p>{message && <div className="form-message" role="status">{message}</div>}<button className="primary-button auth-submit" disabled={busy} onClick={() => void verifyRecoveryLink()}>{busy ? "正在验证…" : "确认并继续"}<ArrowRight size={17} /></button></div>}
+      <div className="auth-switch"><button onClick={() => void onCancel()}><ArrowLeft size={14} />取消并返回登录</button></div>
+    </section>
+    <footer className="auth-footer"><span>PRIVATE BY DESIGN</span><span>© 2026 YOSUKE&apos;S ATLAS</span></footer>
+  </main>;
 }
 
 function Sidebar({ view, setView, name, avatarUrl, admin, unreadCount, onSearch, onLogout }: { view: View; setView: (v: View) => void; name: string; avatarUrl?: string; admin: boolean; unreadCount: number; onSearch: () => void; onLogout: () => void }) {
@@ -301,7 +389,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     if (!user.id || !text.trim()) { setMessage("请先填写留言内容。"); return; }
     setBusy(true); setMessage("");
     const supabase = createSupabaseBrowserClient();
-    if (!supabase) return;
+    if (!supabase) { setMessage("发送失败：Supabase 尚未连接"); setBusy(false); return; }
     const { data: comment, error } = await supabase.from("comments").insert({ author_id: user.id, target_type: targetType, target_id: targetId, parent_id: replyTo?.id || null, body: text.trim() }).select("id").single();
     if (error) { setMessage(`发送失败：${error.message}`); setBusy(false); return; }
     for (const [index, item] of files.entries()) {
@@ -310,7 +398,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
       const { error: uploadError } = await supabase.storage.from("comment-media").upload(path, item.file, { contentType: item.file.type });
       if (uploadError) { setMessage(`留言已发送，但图片上传失败：${uploadError.message}`); break; }
       const { error: imageError } = await supabase.from("comment_images").insert({ comment_id: comment.id, owner_id: user.id, storage_path: path });
-      if (imageError) { setMessage(`留言已发送，但图片记录失败：${imageError.message}`); break; }
+      if (imageError) { await supabase.storage.from("comment-media").remove([path]); setMessage(`留言已发送，但图片记录失败：${imageError.message}`); break; }
     }
     files.forEach((item) => URL.revokeObjectURL(item.preview));
     setText(""); setFiles([]); setReplyTo(undefined); setBusy(false);
@@ -324,26 +412,29 @@ function StoryLikeButton({ storyId, userId }: { storyId: string; userId?: string
   const [liked, setLiked] = useState(false);
   const [count, setCount] = useState(0);
   const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
   const loadLikes = useCallback(async () => {
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return;
-    const { data } = await supabase.from("story_likes").select("user_id").eq("story_id", storyId);
+    const { data, error } = await supabase.from("story_likes").select("user_id").eq("story_id", storyId);
+    if (error) { setMessage(`点赞状态读取失败：${error.message}`); return; }
     setCount(data?.length || 0);
     setLiked(Boolean(userId && data?.some((item) => item.user_id === userId)));
   }, [storyId, userId]);
   useEffect(() => { const task = window.setTimeout(() => void loadLikes(), 0); return () => window.clearTimeout(task); }, [loadLikes]);
   async function toggle() {
     if (!userId || busy) return;
-    setBusy(true);
+    setBusy(true); setMessage("");
     const supabase = createSupabaseBrowserClient();
-    if (supabase) {
-      if (liked) await supabase.from("story_likes").delete().eq("story_id", storyId).eq("user_id", userId);
-      else await supabase.from("story_likes").insert({ story_id: storyId, user_id: userId });
-      await loadLikes();
-    }
+    if (!supabase) { setMessage("点赞失败：Supabase 尚未连接"); setBusy(false); return; }
+    const { error } = liked
+      ? await supabase.from("story_likes").delete().eq("story_id", storyId).eq("user_id", userId)
+      : await supabase.from("story_likes").insert({ story_id: storyId, user_id: userId });
+    if (error) setMessage(`点赞失败：${error.message}`);
+    else await loadLikes();
     setBusy(false);
   }
-  return <button className={`like-button ${liked ? "liked" : ""}`} onClick={() => void toggle()} disabled={busy}><Heart fill={liked ? "currentColor" : "none"} />{liked ? "已喜欢这段旅途" : "喜欢这段旅途"}<span>{count}</span></button>;
+  return <><button className={`like-button ${liked ? "liked" : ""}`} onClick={() => void toggle()} disabled={busy}><Heart fill={liked ? "currentColor" : "none"} />{liked ? "已喜欢这段旅途" : "喜欢这段旅途"}<span>{count}</span></button>{message && <div className="interaction-message" role="status">{message}</div>}</>;
 }
 
 function WallPage({ user }: { user: AppUser }) { return <div className="page narrow-page"><header className="page-header"><div><div className="eyebrow"><span />FRIENDS ONLY</div><h1>朋友留言墙</h1><p>不必关于某一段旅行，想说什么都可以。</p></div></header><div className="wall-feature glass-panel"><div className="wall-orbit" /><span>MESSAGE WALL</span><h2>“路很远，<br />朋友一直都在。”</h2></div><CommentComposer user={user} targetType="wall" targetId="wall" title="所有留言" /></div>; }
@@ -403,7 +494,7 @@ function ProfilePage({ user, onUpdated, onOpenNotifications }: { user: AppUser; 
     if (file.size > 5 * 1024 * 1024) { setMessage("头像不能超过 5MB。"); return; }
     setBusy(true); setMessage("");
     const supabase = createSupabaseBrowserClient();
-    if (!supabase) return;
+    if (!supabase) { setMessage("头像上传失败：Supabase 尚未连接"); setBusy(false); return; }
     const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
     const path = `${user.id}/avatar-${Date.now()}.${extension}`;
     const { error: uploadError } = await supabase.storage.from("avatars").upload(path, file, { contentType: file.type });
@@ -504,9 +595,12 @@ function ProvinceAdminPage({ statuses, onBack, onUpdated }: { statuses: Record<s
 
 function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: ProvinceOption[]; story?: AdminStoryRecord; onBack: () => void; onSaved: () => Promise<void> }) {
   const availableProvinces = provinces.filter((province) => province.status === "visited");
+  const initialTravelDate = (story?.traveledAt || "").split("-");
   const [provinceCode, setProvinceCode] = useState(story?.provinceCode || availableProvinces[0]?.code || provinces[0]?.code || "");
   const [title, setTitle] = useState(story?.title || "");
-  const [traveledAt, setTraveledAt] = useState(story?.traveledAt || "");
+  const [travelYear, setTravelYear] = useState(initialTravelDate[0] || "");
+  const [travelMonth, setTravelMonth] = useState(initialTravelDate[1] || "");
+  const [travelDay, setTravelDay] = useState(initialTravelDate[2] || "");
   const [citySpots, setCitySpots] = useState(story?.citySpots.join("，") || "");
   const [body, setBody] = useState(story?.body || "");
   const [verdict, setVerdict] = useState<"worth_it" | "depends" | "not_recommended">(story?.verdict || "worth_it");
@@ -521,6 +615,19 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
   const [confirmDelete, setConfirmDelete] = useState(false);
   const coverRef = useRef<HTMLInputElement>(null);
   const galleryRef = useRef<HTMLInputElement>(null);
+  const traveledAt = travelYear && travelMonth && travelDay ? `${travelYear}-${travelMonth}-${travelDay}` : "";
+  const travelYears = Array.from({ length: new Date().getFullYear() - 1969 }, (_, index) => String(new Date().getFullYear() - index));
+  const maxTravelDay = travelYear && travelMonth ? new Date(Number(travelYear), Number(travelMonth), 0).getDate() : 31;
+
+  function changeTravelYear(value: string) {
+    setTravelYear(value);
+    if (value && travelMonth && Number(travelDay) > new Date(Number(value), Number(travelMonth), 0).getDate()) setTravelDay("");
+  }
+
+  function changeTravelMonth(value: string) {
+    setTravelMonth(value);
+    if (travelYear && value && Number(travelDay) > new Date(Number(travelYear), Number(value), 0).getDate()) setTravelDay("");
+  }
 
   function chooseCover(file?: File) {
     if (!file) return;
@@ -588,7 +695,7 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
         const { error: uploadError } = await supabase.storage.from("travel-media").upload(coverPath, coverFile, { contentType: coverFile.type });
         if (uploadError) throw uploadError;
         const { error: coverUpdateError } = await supabase.from("stories").update({ cover_path: coverPath }).eq("id", storyId);
-        if (coverUpdateError) throw coverUpdateError;
+        if (coverUpdateError) { await supabase.storage.from("travel-media").remove([coverPath]); throw coverUpdateError; }
         if (story?.coverPath) await supabase.storage.from("travel-media").remove([story.coverPath]);
       }
       for (const [index, photo] of pendingPhotos.entries()) {
@@ -597,7 +704,7 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
         const { error: uploadError } = await supabase.storage.from("travel-media").upload(storagePath, photo.file, { contentType: photo.file.type });
         if (uploadError) throw uploadError;
         const { error: photoInsertError } = await supabase.from("story_photos").insert({ story_id: storyId, storage_path: storagePath, caption_title: photo.captionTitle.trim() || null, caption_story: photo.captionStory.trim() || null, sort_order: index });
-        if (photoInsertError) throw photoInsertError;
+        if (photoInsertError) { await supabase.storage.from("travel-media").remove([storagePath]); throw photoInsertError; }
       }
     } catch (error) {
       setMessage(`文字内容已保存，但图片上传失败：${error instanceof Error ? error.message : "未知错误"}`);
@@ -614,12 +721,23 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
     if (!confirmDelete) { setConfirmDelete(true); setMessage("再次点击“确认删除”将永久删除这篇故事及照片。"); return; }
     setSubmitting("draft");
     const supabase = createSupabaseBrowserClient();
-    if (!supabase) return;
-    const { data: photos } = await supabase.from("story_photos").select("storage_path").eq("story_id", story.id);
+    if (!supabase) { setMessage("删除失败：Supabase 尚未连接"); setSubmitting(undefined); return; }
+    const [{ data: photos }, { data: storyComments, error: commentLoadError }] = await Promise.all([
+      supabase.from("story_photos").select("storage_path").eq("story_id", story.id),
+      supabase.from("comments").select("id, comment_images(storage_path)").eq("target_type", "story").eq("target_id", story.id),
+    ]);
+    if (commentLoadError) { setMessage(`删除失败：无法读取故事留言（${commentLoadError.message}）`); setSubmitting(undefined); return; }
+    const commentMediaPaths = (storyComments || []).flatMap((comment) => (comment.comment_images || []).map((image) => image.storage_path));
+    const commentIds = (storyComments || []).map((comment) => comment.id);
+    if (commentIds.length) {
+      const { error: commentDeleteError } = await supabase.from("comments").delete().in("id", commentIds);
+      if (commentDeleteError) { setMessage(`删除失败：无法清理故事留言（${commentDeleteError.message}）`); setSubmitting(undefined); return; }
+    }
     const mediaPaths = [...(photos || []).map((photo) => photo.storage_path), ...(story.coverPath ? [story.coverPath] : [])];
-    if (mediaPaths.length) await supabase.storage.from("travel-media").remove(mediaPaths);
     const { error } = await supabase.from("stories").delete().eq("id", story.id);
     if (error) { setMessage(`删除失败：${error.message}`); setSubmitting(undefined); return; }
+    if (mediaPaths.length) await supabase.storage.from("travel-media").remove(mediaPaths);
+    if (commentMediaPaths.length) await supabase.storage.from("comment-media").remove(commentMediaPaths);
     await onSaved();
     onBack();
   }
@@ -629,7 +747,11 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
     <section className="story-editor-form glass-panel">
       <div className="editor-grid">
         <label>省份<select value={provinceCode} onChange={(event) => setProvinceCode(event.target.value)}>{availableProvinces.length ? availableProvinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>) : provinces.map((province) => <option key={province.code} value={province.code}>{province.name}</option>)}</select><small>{availableProvinces.length ? "只显示已去过的省份" : "请稍后将该省份状态设为已去过"}</small></label>
-        <label>出行日期<input type="date" value={traveledAt} onChange={(event) => setTraveledAt(event.target.value)} /></label>
+        <div className="date-field"><span>出行日期</span><div className="date-select-row">
+          <label><span>年</span><select aria-label="出行年份" value={travelYear} onChange={(event) => changeTravelYear(event.target.value)}><option value="">年份</option>{travelYears.map((year) => <option key={year} value={year}>{year} 年</option>)}</select></label>
+          <label><span>月</span><select aria-label="出行月份" value={travelMonth} onChange={(event) => changeTravelMonth(event.target.value)}><option value="">月份</option>{Array.from({ length: 12 }, (_, index) => String(index + 1).padStart(2, "0")).map((month) => <option key={month} value={month}>{Number(month)} 月</option>)}</select></label>
+          <label><span>日</span><select aria-label="出行日期" value={travelDay} onChange={(event) => setTravelDay(event.target.value)}><option value="">日期</option>{Array.from({ length: maxTravelDay }, (_, index) => String(index + 1).padStart(2, "0")).map((day) => <option key={day} value={day}>{Number(day)} 日</option>)}</select></label>
+        </div></div>
         <label className="editor-wide">故事标题<input value={title} onChange={(event) => setTitle(event.target.value)} placeholder="给这段旅程一个标题" /></label>
         <label className="editor-wide">城市及景点<input value={citySpots} onChange={(event) => setCitySpots(event.target.value)} placeholder="例如：康定，新都桥，折多山（用逗号分隔）" /></label>
         <label className="editor-wide">正文故事<textarea rows={12} value={body} onChange={(event) => setBody(event.target.value)} placeholder="写下这段旅行发生的故事…" /></label>
@@ -666,9 +788,13 @@ function AdminCommentsPage({ onBack }: { onBack: () => void }) {
     if (confirmId !== comment.id) { setConfirmId(comment.id); setMessage("再次点击红色删除按钮确认永久删除该留言。"); return; }
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return;
-    if (comment.imagePaths.length) await supabase.storage.from("comment-media").remove(comment.imagePaths);
     const { error } = await supabase.from("comments").delete().eq("id", comment.id);
-    if (error) setMessage(`删除失败：${error.message}`); else { setComments((current) => current.filter((item) => item.id !== comment.id)); setConfirmId(undefined); setMessage("留言已删除。"); }
+    if (error) setMessage(`删除失败：${error.message}`); else {
+      const storageResult = comment.imagePaths.length ? await supabase.storage.from("comment-media").remove(comment.imagePaths) : { error: null };
+      setComments((current) => current.filter((item) => item.id !== comment.id));
+      setConfirmId(undefined);
+      setMessage(storageResult.error ? `留言已删除，但图片清理失败：${storageResult.error.message}` : "留言及其图片已删除。");
+    }
   }
   return <div className="page admin-page"><header className="page-header"><div><button className="back-link" onClick={onBack}><ArrowLeft size={16} />返回管理后台</button><div className="eyebrow"><span />MODERATION</div><h1>全站留言审核</h1><p>查看并删除故事、省份、计划页和留言墙中的内容。</p></div></header>{message && <div className="admin-feedback">{message}</div>}<section className="moderation-list glass-panel">{loading && <div className="empty-state">正在加载留言…</div>}{!loading && !comments.length && <div className="empty-state">当前没有留言</div>}{comments.map((comment) => <article key={comment.id}><div className="avatar small">{comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName}</strong><small>{comment.targetType} · {comment.targetId} · {new Date(comment.createdAt).toLocaleString("zh-CN")}</small><p>{comment.body}</p>{comment.imagePaths.length > 0 && <span>{comment.imagePaths.length} 张图片</span>}</div><button className={confirmId === comment.id ? "confirmed" : ""} onClick={() => void removeComment(comment)} aria-label="删除留言"><Trash2 /></button></article>)}</section></div>;
 }
@@ -819,19 +945,22 @@ function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManageP
 export default function TravelAtlas() {
   const [user, setUser] = useState<AppUser | null>(null);
   const [authReady, setAuthReady] = useState(!hasSupabaseEnv);
+  const [recoveryMode, setRecoveryMode] = useState(false);
+  const [recoveryTokenHash, setRecoveryTokenHash] = useState<string>();
+  const [authMessage, setAuthMessage] = useState("");
   const [view, setView] = useState<View>("map");
   const [province, setProvince] = useState<{ name: string; status: ProvinceStatus }>();
   const [story, setStory] = useState<string>();
   const [selectedAdminStoryId, setSelectedAdminStoryId] = useState<string>();
   const [searchOpen, setSearchOpen] = useState(false);
-  const [statuses, setStatuses] = useState<Record<string, ProvinceStatus>>(provinceStatus);
+  const [statuses, setStatuses] = useState<Record<string, ProvinceStatus>>(hasSupabaseEnv ? {} : provinceStatus);
   const [provinceOptions, setProvinceOptions] = useState<ProvinceOption[]>([]);
   const [adminStories, setAdminStories] = useState<AdminStoryRecord[]>([]);
   const [adminPhotos, setAdminPhotos] = useState<AdminPhotoRecord[]>([]);
-  const [plans, setPlans] = useState<Record<string, ProvincePlan>>(initialPlans);
-  const [publishedStories, setPublishedStories] = useState<AtlasStory[]>(initialDemoStories);
-  const [stats, setStats] = useState<AtlasStats>(demoStats);
-  const [usingDemoData, setUsingDemoData] = useState(true);
+  const [plans, setPlans] = useState<Record<string, ProvincePlan>>(hasSupabaseEnv ? {} : initialPlans);
+  const [publishedStories, setPublishedStories] = useState<AtlasStory[]>(hasSupabaseEnv ? [] : initialDemoStories);
+  const [stats, setStats] = useState<AtlasStats>(hasSupabaseEnv ? emptyStats : demoStats);
+  const [usingDemoData, setUsingDemoData] = useState(!hasSupabaseEnv);
   const [atlasLoading, setAtlasLoading] = useState(false);
   const [atlasError, setAtlasError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
@@ -861,6 +990,11 @@ export default function TravelAtlas() {
     if (parts[0] === "story" && parts[1]) { setStory(parts[1]); setProvince(undefined); setView("map"); return; }
     if (parts[0] === "province" && parts[1]) { setProvince({ name: parts[1], status: statuses[parts[1]] || "unplanned" }); setStory(undefined); setView("map"); return; }
     if (parts[0] === "admin") {
+      if (user && !user.admin) {
+        window.history.replaceState({}, "", "/map");
+        setView("map"); setProvince(undefined); setStory(undefined);
+        return;
+      }
       if (parts[1] === "provinces") setView("admin-provinces");
       else if (parts[1] === "comments") setView("admin-comments");
       else if (parts[1] === "users") setView("admin-users");
@@ -872,7 +1006,7 @@ export default function TravelAtlas() {
     }
     const routeViews: Record<string, View> = { map: "map", wall: "wall", notifications: "notifications", profile: "profile" };
     setView(routeViews[parts[0]] || "map"); setProvince(undefined); setStory(undefined);
-  }, [statuses]);
+  }, [statuses, user]);
 
   const navigateUrl = useCallback((url: string) => {
     window.history.pushState({}, "", url);
@@ -912,7 +1046,10 @@ export default function TravelAtlas() {
         avatarUrl,
         admin: profile?.role === "admin",
       });
-      if (window.location.pathname === "/login" || window.location.pathname === "/") window.history.replaceState({}, "", "/map");
+      if (window.location.pathname === "/login" || window.location.pathname === "/" || (profile?.role !== "admin" && window.location.pathname.startsWith("/admin"))) {
+        window.history.replaceState({}, "", "/map");
+        setView("map");
+      }
     }
     setAuthReady(true);
   }, []);
@@ -927,11 +1064,70 @@ export default function TravelAtlas() {
   useEffect(() => {
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return;
-    void supabase.auth.getSession().then(({ data }) => loadUserProfile(data.session?.user || null));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
-      void loadUserProfile(session?.user || null);
+    const query = new URLSearchParams(window.location.search);
+    const rawHash = window.location.hash.replace(/^#/, "");
+    const hash = new URLSearchParams(rawHash);
+    const errorCode = query.get("error_code") || hash.get("error_code");
+    const errorDescription = query.get("error_description") || hash.get("error_description");
+    const authCode = query.get("code") || undefined;
+    const wrappedConfirmationUrl = rawHash.startsWith("confirmation_url=") ? rawHash.slice("confirmation_url=".length) : undefined;
+    let wrappedTokenHash: string | undefined;
+    if (wrappedConfirmationUrl) {
+      try {
+        const decodedConfirmationUrl = decodeURIComponent(wrappedConfirmationUrl);
+        wrappedTokenHash = new URL(decodedConfirmationUrl).searchParams.get("token") || undefined;
+      } catch { wrappedTokenHash = undefined; }
+    }
+    const tokenHash = query.get("token_hash") || wrappedTokenHash;
+    const initialRecovery = Boolean(wrappedTokenHash) || hash.get("type") === "recovery" || (query.get("type") === "recovery" && Boolean(tokenHash));
+    let recoveryActive = initialRecovery || Boolean(authCode);
+    const startupTask = window.setTimeout(() => {
+      if (errorCode || errorDescription) setAuthMessage(getAuthErrorMessage(new Error(errorCode || errorDescription || "")));
+      if (initialRecovery) {
+        setRecoveryTokenHash(tokenHash);
+        setRecoveryMode(true);
+        setUser(null);
+        setAuthReady(true);
+      }
+    }, 0);
+    if (errorCode || errorDescription) {
+      window.history.replaceState({}, "", "/login");
+    }
+    if (authCode) {
+      void supabase.auth.exchangeCodeForSession(authCode).then(({ error }) => {
+        if (error) {
+          recoveryActive = false;
+          setRecoveryMode(false);
+          setUser(null);
+          setAuthMessage(getAuthErrorMessage(error));
+          setAuthReady(true);
+          window.history.replaceState({}, "", "/login");
+          return;
+        }
+        recoveryActive = true;
+        setRecoveryTokenHash(undefined);
+        setRecoveryMode(true);
+        setUser(null);
+        setAuthReady(true);
+        window.history.replaceState({}, "", "/reset-password");
+      });
+    } else if (!recoveryActive) {
+      void supabase.auth.getSession().then(({ data }) => loadUserProfile(data.session?.user || null));
+    }
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        recoveryActive = true;
+        setRecoveryTokenHash(undefined);
+        setRecoveryMode(true);
+        setUser(null);
+        setAuthReady(true);
+        window.history.replaceState({}, "", "/reset-password");
+        return;
+      }
+      if (event === "SIGNED_OUT") recoveryActive = false;
+      if (!recoveryActive) void loadUserProfile(session?.user || null);
     });
-    return () => listener.subscription.unsubscribe();
+    return () => { window.clearTimeout(startupTask); listener.subscription.unsubscribe(); };
   }, [loadUserProfile]);
 
   const loadAtlasData = useCallback(async () => {
@@ -1029,7 +1225,7 @@ export default function TravelAtlas() {
       visited: provinceResult.data.filter((item) => item.status === "visited").length,
       planned: provinceResult.data.filter((item) => item.status === "planned").length,
       stories: (storyResult.data || []).filter((item) => item.is_published).length,
-      photos: (photoResult.data || []).length,
+      photos: (photoResult.data || []).filter((photo) => nextAdminStories.some((item) => item.id === photo.story_id && item.isPublished)).length,
     });
     setUsingDemoData(false);
     setAtlasLoading(false);
@@ -1097,21 +1293,23 @@ export default function TravelAtlas() {
     requestAnimationFrame(() => window.scrollTo({ top: 0, behavior: "auto" }));
   }
   async function logout() { await createSupabaseBrowserClient()?.auth.signOut(); setUser(null); window.history.replaceState({}, "", "/login"); setView("map"); }
+  async function cancelRecovery() { await createSupabaseBrowserClient()?.auth.signOut(); setRecoveryMode(false); setRecoveryTokenHash(undefined); setUser(null); setAuthMessage(""); window.history.replaceState({}, "", "/login"); }
   const page = useMemo(() => {
     if (!user) return null;
     if (view === "wall") return <WallPage user={user} />;
     if (view === "notifications") return <NotificationPage user={user} onNavigate={navigateUrl} onUnreadChange={setUnreadCount} />;
     if (view === "profile") return <ProfilePage user={user} onUpdated={refreshCurrentUser} onOpenNotifications={() => navigateView("notifications")} />;
     if (view === "admin" && user.admin) return <AdminPage stats={stats} provinceCount={provinceOptions.length} stories={adminStories} onManageProvinces={() => navigateView("admin-provinces")} onManagePlans={() => navigateView("admin-plans")} onManagePhotos={() => navigateView("admin-photos")} onManageComments={() => navigateView("admin-comments")} onManageUsers={() => navigateView("admin-users")} onNewStory={() => { setSelectedAdminStoryId(undefined); navigateView("admin-story-new"); }} onEditStory={(id) => { setSelectedAdminStoryId(id); window.history.pushState({}, "", `/admin/stories/${id}`); setView("admin-story-new"); }} />;
-    if (view === "admin-provinces" && user.admin) return <ProvinceAdminPage statuses={statuses} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
-    if (view === "admin-story-new" && user.admin) return <StoryEditorPage provinces={provinceOptions} story={adminStories.find((item) => item.id === selectedAdminStoryId)} onBack={() => navigateView("admin")} onSaved={loadAtlasData} />;
+    if (view === "admin-provinces" && user.admin) return <ProvinceAdminPage key={Object.entries(statuses).sort(([left], [right]) => left.localeCompare(right)).map(([name, status]) => `${name}:${status}`).join("|")} statuses={statuses} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
+    if (view === "admin-story-new" && user.admin) return <StoryEditorPage key={`${selectedAdminStoryId || "new"}:${adminStories.some((item) => item.id === selectedAdminStoryId) ? "ready" : "loading"}:${provinceOptions.length}`} provinces={provinceOptions} story={adminStories.find((item) => item.id === selectedAdminStoryId)} onBack={() => navigateView("admin")} onSaved={loadAtlasData} />;
     if (view === "admin-comments" && user.admin) return <AdminCommentsPage onBack={() => navigateView("admin")} />;
     if (view === "admin-users" && user.admin) return <AdminUsersPage currentUserId={user.id} onBack={() => navigateView("admin")} />;
-    if (view === "admin-photos" && user.admin) return <AdminPhotoLibraryPage photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
-    if (view === "admin-plans" && user.admin) return <AdminPlansPage plans={Object.values(plans)} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
+    if (view === "admin-photos" && user.admin) return <AdminPhotoLibraryPage key={adminPhotos.map((photo) => photo.id).join("|")} photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
+    if (view === "admin-plans" && user.admin) return <AdminPlansPage key={JSON.stringify(plans)} plans={Object.values(plans)} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     return <MapHome statuses={statuses} stats={stats} stories={publishedStories} usingDemoData={usingDemoData} onProvince={openProvince} onStory={openStory} onNavigate={navigateView} onSearch={() => setSearchOpen(true)} />;
   }, [adminPhotos, adminStories, loadAtlasData, navigateUrl, navigateView, openProvince, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
   if (!authReady) return <main className="auth-loading"><Brand /><span>正在确认访问权限…</span></main>;
-  if (!user) return <AuthGate onEnter={enter} />;
+  if (recoveryMode) return <PasswordRecoveryPage tokenHash={recoveryTokenHash} onTokenConsumed={() => setRecoveryTokenHash(undefined)} onComplete={(message) => { setRecoveryMode(false); setRecoveryTokenHash(undefined); setUser(null); setAuthMessage(message); }} onCancel={cancelRecovery} />;
+  if (!user) return <AuthGate onEnter={enter} initialMessage={authMessage} />;
   return <main className="app-shell"><Sidebar view={view} setView={navigateView} name={user.name} avatarUrl={user.avatarUrl} admin={user.admin} unreadCount={unreadCount} onSearch={() => setSearchOpen(true)} onLogout={logout} /><div className="app-content">{(atlasLoading || atlasError) && <div className={`global-status ${atlasError ? "error" : ""}`}>{atlasError || "正在同步旅行数据…"}{atlasError && <button onClick={() => void loadAtlasData()}>重试</button>}</div>}{page}</div>{province && <ProvincePanel province={province.name} status={province.status} plan={plans[province.name]} allStories={publishedStories} user={user} onClose={closeOverlay} onStory={openStory} />}{story && <StoryDetail id={story} stories={publishedStories} user={user} onClose={closeOverlay} />}{searchOpen && <SearchOverlay statuses={statuses} stories={publishedStories} onClose={() => setSearchOpen(false)} onProvince={openProvince} onStory={openStory} />}</main>;
 }
