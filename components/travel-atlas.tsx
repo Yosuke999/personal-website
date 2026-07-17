@@ -771,17 +771,17 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
 }
 
 function AdminCommentsPage({ onBack }: { onBack: () => void }) {
-  const [comments, setComments] = useState<Array<{ id: string; authorName: string; targetType: string; targetId: string; body: string; createdAt: string; imagePaths: string[] }>>([]);
+  const [comments, setComments] = useState<Array<{ id: string; parentId?: string; authorName: string; targetType: string; targetId: string; body: string; createdAt: string; imagePaths: string[] }>>([]);
   const [loading, setLoading] = useState(true);
   const [message, setMessage] = useState("");
   const [confirmId, setConfirmId] = useState<string>();
   const loadComments = useCallback(async () => {
     const supabase = createSupabaseBrowserClient();
-    const { data, error } = supabase ? await supabase.from("comments").select("id, target_type, target_id, body, created_at, profiles(display_name), comment_images(storage_path)").order("created_at", { ascending: false }).limit(200) : { data: null, error: new Error("Supabase 尚未连接") };
+    const { data, error } = supabase ? await supabase.from("comments").select("id, parent_id, target_type, target_id, body, created_at, profiles(display_name), comment_images(storage_path)").order("created_at", { ascending: false }).limit(200) : { data: null, error: new Error("Supabase 尚未连接") };
     if (error) setMessage(`留言加载失败：${error.message}`);
     else {
-      const rows = (data || []) as unknown as Array<{ id: string; target_type: string; target_id: string; body: string; created_at: string; profiles: { display_name: string } | Array<{ display_name: string }>; comment_images: Array<{ storage_path: string }> }>;
-      setComments(rows.map((row) => ({ id: row.id, authorName: (Array.isArray(row.profiles) ? row.profiles[0] : row.profiles)?.display_name || "旅行朋友", targetType: row.target_type, targetId: row.target_id, body: row.body, createdAt: row.created_at, imagePaths: row.comment_images.map((image) => image.storage_path) })));
+      const rows = (data || []) as unknown as Array<{ id: string; parent_id?: string; target_type: string; target_id: string; body: string; created_at: string; profiles: { display_name: string } | Array<{ display_name: string }>; comment_images: Array<{ storage_path: string }> }>;
+      setComments(rows.map((row) => ({ id: row.id, parentId: row.parent_id, authorName: (Array.isArray(row.profiles) ? row.profiles[0] : row.profiles)?.display_name || "旅行朋友", targetType: row.target_type, targetId: row.target_id, body: row.body, createdAt: row.created_at, imagePaths: row.comment_images.map((image) => image.storage_path) })));
     }
     setLoading(false);
   }, []);
@@ -793,7 +793,20 @@ function AdminCommentsPage({ onBack }: { onBack: () => void }) {
     const { error } = await supabase.from("comments").delete().eq("id", comment.id);
     if (error) setMessage(`删除失败：${error.message}`); else {
       const storageResult = comment.imagePaths.length ? await supabase.storage.from("comment-media").remove(comment.imagePaths) : { error: null };
-      setComments((current) => current.filter((item) => item.id !== comment.id));
+      setComments((current) => {
+        const removedIds = new Set([comment.id]);
+        let foundDescendant = true;
+        while (foundDescendant) {
+          foundDescendant = false;
+          current.forEach((item) => {
+            if (item.parentId && removedIds.has(item.parentId) && !removedIds.has(item.id)) {
+              removedIds.add(item.id);
+              foundDescendant = true;
+            }
+          });
+        }
+        return current.filter((item) => !removedIds.has(item.id));
+      });
       setConfirmId(undefined);
       setMessage(storageResult.error ? `留言已删除，但图片清理失败：${storageResult.error.message}` : "留言及其图片已删除。");
     }

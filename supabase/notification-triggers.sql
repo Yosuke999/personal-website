@@ -20,12 +20,12 @@ begin
   if new.parent_id is not null then
     select author_id into recipient from public.comments where id = new.parent_id;
     if recipient is not null and recipient <> new.author_id then
-      insert into public.notifications(recipient_id, actor_id, kind, target_url, message)
-      values(recipient, new.author_id, 'reply', destination, actor_name || ' 回复了你的留言');
+      insert into public.notifications(recipient_id, actor_id, kind, target_url, message, comment_id)
+      values(recipient, new.author_id, 'reply', destination, actor_name || ' 回复了你的留言', new.id);
     end if;
   else
-    insert into public.notifications(recipient_id, actor_id, kind, target_url, message)
-    select id, new.author_id, 'comment', destination, actor_name || ' 发表了新留言'
+    insert into public.notifications(recipient_id, actor_id, kind, target_url, message, comment_id)
+    select id, new.author_id, 'comment', destination, actor_name || ' 发表了新留言', new.id
     from public.profiles
     where role = 'admin' and not is_blocked and id <> new.author_id;
   end if;

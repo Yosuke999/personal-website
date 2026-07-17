@@ -107,6 +107,7 @@ create table public.notifications (
   id uuid primary key default gen_random_uuid(),
   recipient_id uuid not null references public.profiles(id) on delete cascade,
   actor_id uuid references public.profiles(id) on delete set null,
+  comment_id uuid references public.comments(id) on delete cascade,
   kind text not null,
   target_url text not null,
   message text not null,
