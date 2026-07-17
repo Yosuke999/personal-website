@@ -968,6 +968,12 @@ export default function TravelAtlas() {
   const [atlasError, setAtlasError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const previousFocus = useRef<HTMLElement | null>(null);
+  const searchOpenerFocus = useRef<HTMLElement | null>(null);
+
+  const openSearch = useCallback(() => {
+    searchOpenerFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    setSearchOpen(true);
+  }, []);
 
   const navigateView = useCallback((nextView: View, replace = false) => {
     const paths: Record<View, string> = { map: "/map", wall: "/wall", notifications: "/notifications", profile: "/profile", admin: "/admin", "admin-provinces": "/admin/provinces", "admin-story-new": "/admin/stories/new", "admin-comments": "/admin/comments", "admin-users": "/admin/users", "admin-photos": "/admin/photos", "admin-plans": "/admin/plans" };
@@ -1285,7 +1291,9 @@ export default function TravelAtlas() {
   useEffect(() => {
     if (!province && !story && !searchOpen) return;
     const previousOverflow = document.body.style.overflow;
-    previousFocus.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    previousFocus.current = searchOpen && searchOpenerFocus.current
+      ? searchOpenerFocus.current
+      : document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = "hidden";
     const focusTask = window.setTimeout(() => {
       const layer = document.querySelector<HTMLElement>("[data-focus-layer], .story-overlay, .province-panel");
@@ -1313,7 +1321,21 @@ export default function TravelAtlas() {
       window.clearTimeout(focusTask);
       document.body.style.overflow = previousOverflow;
       window.removeEventListener("keydown", handleLayerKeys);
-      previousFocus.current?.focus();
+      const target = previousFocus.current;
+      window.setTimeout(() => {
+        const rect = target?.getBoundingClientRect();
+        const targetIsVisible = Boolean(
+          target?.isConnected
+          && rect
+          && rect.right > 0
+          && rect.left < window.innerWidth
+          && rect.bottom > 0
+          && rect.top < window.innerHeight,
+        );
+        const fallback = document.querySelector<HTMLElement>(".mobile-menu");
+        (targetIsVisible ? target : fallback)?.focus();
+        if (searchOpenerFocus.current === target) searchOpenerFocus.current = null;
+      }, 0);
     };
   }, [closeOverlay, province, searchOpen, story]);
 
@@ -1335,10 +1357,10 @@ export default function TravelAtlas() {
     if (view === "admin-users" && user.admin) return <AdminUsersPage currentUserId={user.id} onBack={() => navigateView("admin")} />;
     if (view === "admin-photos" && user.admin) return <AdminPhotoLibraryPage key={adminPhotos.map((photo) => photo.id).join("|")} photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     if (view === "admin-plans" && user.admin) return <AdminPlansPage key={JSON.stringify(plans)} plans={Object.values(plans)} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
-    return <MapHome statuses={statuses} stats={stats} stories={publishedStories} usingDemoData={usingDemoData} onProvince={openProvince} onStory={openStory} onNavigate={navigateView} onSearch={() => setSearchOpen(true)} />;
-  }, [adminPhotos, adminStories, loadAtlasData, navigateUrl, navigateView, openProvince, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
+    return <MapHome statuses={statuses} stats={stats} stories={publishedStories} usingDemoData={usingDemoData} onProvince={openProvince} onStory={openStory} onNavigate={navigateView} onSearch={openSearch} />;
+  }, [adminPhotos, adminStories, loadAtlasData, navigateUrl, navigateView, openProvince, openSearch, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
   if (!authReady) return <main className="auth-loading"><Brand /><span>正在确认访问权限…</span></main>;
   if (recoveryMode) return <PasswordRecoveryPage tokenHash={recoveryTokenHash} onTokenConsumed={() => setRecoveryTokenHash(undefined)} onComplete={(message) => { setRecoveryMode(false); setRecoveryTokenHash(undefined); setUser(null); setAuthMessage(message); }} onCancel={cancelRecovery} />;
   if (!user) return <AuthGate onEnter={enter} initialMessage={authMessage} />;
-  return <main className="app-shell"><Sidebar view={view} setView={navigateView} name={user.name} avatarUrl={user.avatarUrl} admin={user.admin} unreadCount={unreadCount} onSearch={() => setSearchOpen(true)} onLogout={logout} /><div className="app-content">{(atlasLoading || atlasError) && <div className={`global-status ${atlasError ? "error" : ""}`}>{atlasError || "正在同步旅行数据…"}{atlasError && <button onClick={() => void loadAtlasData()}>重试</button>}</div>}{page}</div>{province && <ProvincePanel province={province.name} status={province.status} plan={plans[province.name]} allStories={publishedStories} user={user} onClose={closeOverlay} onStory={openStory} />}{story && <StoryDetail id={story} stories={publishedStories} user={user} onClose={closeOverlay} />}{searchOpen && <SearchOverlay statuses={statuses} stories={publishedStories} onClose={() => setSearchOpen(false)} onProvince={openProvince} onStory={openStory} />}</main>;
+  return <main className="app-shell"><Sidebar view={view} setView={navigateView} name={user.name} avatarUrl={user.avatarUrl} admin={user.admin} unreadCount={unreadCount} onSearch={openSearch} onLogout={logout} /><div className="app-content">{(atlasLoading || atlasError) && <div className={`global-status ${atlasError ? "error" : ""}`}>{atlasError || "正在同步旅行数据…"}{atlasError && <button onClick={() => void loadAtlasData()}>重试</button>}</div>}{page}</div>{province && <ProvincePanel province={province.name} status={province.status} plan={plans[province.name]} allStories={publishedStories} user={user} onClose={closeOverlay} onStory={openStory} />}{story && <StoryDetail id={story} stories={publishedStories} user={user} onClose={closeOverlay} />}{searchOpen && <SearchOverlay statuses={statuses} stories={publishedStories} onClose={() => setSearchOpen(false)} onProvince={openProvince} onStory={openStory} />}</main>;
 }
