@@ -4,10 +4,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import {
-  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, Camera, Check, ChevronRight, CircleUserRound,
+  ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, Camera, Check, ChevronLeft, ChevronRight, CircleUserRound,
   Compass, Heart, ImagePlus, LayoutDashboard, LockKeyhole, LogOut, Map,
   MapPin, Menu, MessageCircle, Plus, Search, Send, Settings2, ShieldCheck,
-  Save, Sparkles, Star, Trash2, Upload, Users, X,
+  Save, Share2, Sparkles, Star, Trash2, Upload, Users, X,
 } from "lucide-react";
 import ChinaMap from "@/components/china-map";
 import { demoStories, plannedTrips, provinceStatus, type ProvinceStatus } from "@/data/demo";
@@ -332,8 +332,107 @@ function ProvincePanel({ province, status, plan, allStories, user, onClose, onSt
 
 function StoryDetail({ id, stories, user, onClose }: { id: string; stories: AtlasStory[]; user: AppUser; onClose: () => void }) {
   const story = stories.find((item) => item.id === id);
+  const overlayRef = useRef<HTMLDivElement>(null);
+  const [scrollProgress, setScrollProgress] = useState(0);
+  const [showBackToTop, setShowBackToTop] = useState(false);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [shareMessage, setShareMessage] = useState("");
+  const touchStartX = useRef<number | null>(null);
+
+  const closeLightbox = useCallback(() => {
+    const closingIndex = lightboxIndex;
+    setLightboxIndex(null);
+    if (closingIndex !== null) {
+      window.setTimeout(() => document.querySelector<HTMLElement>(`[aria-label="放大查看第 ${closingIndex + 1} 张照片"]`)?.focus(), 0);
+    }
+  }, [lightboxIndex]);
+  const showPreviousPhoto = useCallback(() => {
+    if (!story?.photos.length) return;
+    setLightboxIndex((current) => current === null ? 0 : (current - 1 + story.photos.length) % story.photos.length);
+  }, [story]);
+  const showNextPhoto = useCallback(() => {
+    if (!story?.photos.length) return;
+    setLightboxIndex((current) => current === null ? 0 : (current + 1) % story.photos.length);
+  }, [story]);
+
+  useEffect(() => {
+    if (lightboxIndex === null) return;
+    window.setTimeout(() => document.querySelector<HTMLElement>(".story-lightbox-top button")?.focus(), 0);
+    const handleLightboxKeys = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeLightbox();
+      else if (event.key === "ArrowLeft") showPreviousPhoto();
+      else if (event.key === "ArrowRight") showNextPhoto();
+    };
+    window.addEventListener("keydown", handleLightboxKeys);
+    return () => window.removeEventListener("keydown", handleLightboxKeys);
+  }, [closeLightbox, lightboxIndex, showNextPhoto, showPreviousPhoto]);
+
+  const handleStoryScroll = () => {
+    const element = overlayRef.current;
+    if (!element) return;
+    const available = element.scrollHeight - element.clientHeight;
+    setScrollProgress(available > 0 ? Math.min(100, Math.max(0, element.scrollTop / available * 100)) : 0);
+    setShowBackToTop(element.scrollTop > Math.max(700, element.clientHeight * .8));
+  };
+
+  const shareStory = async () => {
+    const shareData = { title: story?.title || "Yosuke 的旅行故事", text: story?.excerpt || "", url: window.location.href };
+    try {
+      if (navigator.share) await navigator.share(shareData);
+      else {
+        await navigator.clipboard.writeText(shareData.url);
+        setShareMessage("链接已复制");
+        window.setTimeout(() => setShareMessage(""), 2200);
+      }
+    } catch (error) {
+      if (error instanceof DOMException && error.name === "AbortError") return;
+      setShareMessage("分享失败，请稍后重试");
+      window.setTimeout(() => setShareMessage(""), 2200);
+    }
+  };
+
   if (!story) return null;
-  return <div className="story-overlay"><button className="story-back" onClick={onClose}><ArrowLeft />返回地图</button><div className={`story-hero-large story-${story.tone}`}>{story.coverUrl && <img className="story-hero-image" src={story.coverUrl} alt="" />}<div className="hero-mountain mountain-one" /><div className="hero-mountain mountain-two" /><div className="story-title-block"><div className="eyebrow"><span />{story.city}</div><h1>{story.title}</h1><p>{story.date}</p></div><span className="scroll-hint">SCROLL TO EXPLORE <i /></span></div><article className="story-article"><div className="story-lead"><span>01</span><p>{story.body}</p></div>{story.photos.length > 0 && <section className="photo-story-list">{story.photos.map((photo, index) => <article className="photo-story-entry" key={photo.id}><img src={photo.url} alt={photo.captionTitle || `旅行照片 ${index + 1}`} /><div><small>PHOTO STORY · {twoDigits(index + 1)}</small>{photo.captionTitle && <h3>{photo.captionTitle}</h3>}{photo.captionStory && <p>{photo.captionStory}</p>}</div></article>)}</section>}<section className="rating-card glass-panel"><div><small>YOSUKE&apos;S VERDICT</small><h2>{story.verdict}</h2><div className="rating-stars">{Array.from({ length: 5 }).map((_, i) => <Star key={i} fill={i < story.rating ? "currentColor" : "none"} />)}</div></div><div><h3>旅行评价</h3><div className="tag-row">{story.pros.map((tag) => <span className="positive" key={tag}>+ {tag}</span>)}{story.cons.map((tag) => <span className="negative" key={tag}>− {tag}</span>)}</div><p>{story.excerpt}</p></div></section><StoryLikeButton storyId={story.id} userId={user.id} /><CommentComposer user={user} targetType="story" targetId={story.id} title="故事评论" /></article></div>;
+  const activePhoto = lightboxIndex === null ? null : story.photos[lightboxIndex];
+  return <div className="story-overlay" ref={overlayRef} onScroll={handleStoryScroll}>
+    <div className="story-progress" aria-hidden="true"><span style={{ width: `${scrollProgress}%` }} /></div>
+    <nav className="story-toolbar" aria-label="故事工具栏">
+      <button onClick={onClose} aria-label="返回地图"><ArrowLeft /><span>返回地图</span></button>
+      <button onClick={() => void shareStory()} aria-label="分享故事"><Share2 /><span>分享</span></button>
+    </nav>
+    {shareMessage && <div className="story-toast" role="status">{shareMessage}</div>}
+    <div className={`story-hero-large story-${story.tone}`}>{story.coverUrl && <img className="story-hero-image" src={story.coverUrl} alt="" />}<div className="hero-mountain mountain-one" /><div className="hero-mountain mountain-two" /><div className="story-title-block"><div className="eyebrow"><span />{story.city}</div><h1>{story.title}</h1><p>{story.date}</p></div><span className="scroll-hint">SCROLL TO EXPLORE <i /></span></div>
+    <article className="story-article">
+      <div className="story-lead"><span>01</span><p>{story.body}</p></div>
+      {story.photos.length > 0 && <section className="photo-story-list">{story.photos.map((photo, index) => <article className="photo-story-entry" key={photo.id}>
+        <button className="story-photo-button" onClick={() => setLightboxIndex(index)} aria-label={`放大查看第 ${index + 1} 张照片`}>
+          <img src={photo.url} alt={photo.captionTitle || `旅行照片 ${index + 1}`} loading="lazy" decoding="async" />
+          <span>查看大图</span>
+        </button>
+        <div><small>PHOTO STORY · {twoDigits(index + 1)}</small>{photo.captionTitle && <h3>{photo.captionTitle}</h3>}{photo.captionStory && <p>{photo.captionStory}</p>}</div>
+      </article>)}</section>}
+      <section className="rating-card glass-panel"><div><small>YOSUKE&apos;S VERDICT</small><h2>{story.verdict}</h2><div className="rating-stars">{Array.from({ length: 5 }).map((_, i) => <Star key={i} fill={i < story.rating ? "currentColor" : "none"} />)}</div></div><div><h3>旅行评价</h3><div className="tag-row">{story.pros.map((tag) => <span className="positive" key={tag}>+ {tag}</span>)}{story.cons.map((tag) => <span className="negative" key={tag}>− {tag}</span>)}</div><p>{story.excerpt}</p></div></section>
+      <StoryLikeButton storyId={story.id} userId={user.id} />
+      <CommentComposer user={user} targetType="story" targetId={story.id} title="故事评论" />
+    </article>
+    {showBackToTop && <button className="story-to-top" onClick={() => overlayRef.current?.scrollTo({ top: 0, behavior: "smooth" })} aria-label="返回故事顶部"><ArrowUp /><span>顶部</span></button>}
+    {activePhoto && <div className="story-lightbox" data-focus-layer role="dialog" aria-modal="true" aria-label={`照片 ${lightboxIndex! + 1}，共 ${story.photos.length} 张`}>
+      <button className="story-lightbox-backdrop" onClick={closeLightbox} aria-label="关闭照片浏览" />
+      <div className="story-lightbox-stage" onTouchStart={(event) => { touchStartX.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={(event) => {
+        if (touchStartX.current === null) return;
+        const distance = (event.changedTouches[0]?.clientX ?? touchStartX.current) - touchStartX.current;
+        if (Math.abs(distance) > 50) {
+          if (distance > 0) showPreviousPhoto();
+          else showNextPhoto();
+        }
+        touchStartX.current = null;
+      }}>
+        <img src={activePhoto.url} alt={activePhoto.captionTitle || `旅行照片 ${lightboxIndex! + 1}`} />
+        {(activePhoto.captionTitle || activePhoto.captionStory) && <div className="story-lightbox-caption">{activePhoto.captionTitle && <strong>{activePhoto.captionTitle}</strong>}{activePhoto.captionStory && <p>{activePhoto.captionStory}</p>}</div>}
+      </div>
+      <div className="story-lightbox-top"><span>{twoDigits(lightboxIndex! + 1)} / {twoDigits(story.photos.length)}</span><button onClick={closeLightbox} aria-label="关闭照片浏览"><X /></button></div>
+      {story.photos.length > 1 && <><button className="story-lightbox-arrow story-lightbox-previous" onClick={showPreviousPhoto} aria-label="上一张照片"><ChevronLeft /></button><button className="story-lightbox-arrow story-lightbox-next" onClick={showNextPhoto} aria-label="下一张照片"><ChevronRight /></button></>}
+    </div>}
+  </div>;
 }
 
 function CommentComposer({ user, targetType, targetId, compact = false, title = "省份留言" }: { user: AppUser; targetType: CommentTarget; targetId: string; compact?: boolean; title?: string }) {
@@ -1309,7 +1408,7 @@ export default function TravelAtlas() {
       : document.activeElement instanceof HTMLElement ? document.activeElement : null;
     document.body.style.overflow = "hidden";
     const focusTask = window.setTimeout(() => {
-      const layer = document.querySelector<HTMLElement>("[data-focus-layer], .story-overlay, .province-panel");
+      const layer = document.querySelector<HTMLElement>(".story-lightbox") || document.querySelector<HTMLElement>("[data-focus-layer], .story-overlay, .province-panel");
       if (!layer) return;
       if (!layer.hasAttribute("tabindex")) layer.tabIndex = -1;
       const first = layer.querySelector<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])');
@@ -1317,12 +1416,13 @@ export default function TravelAtlas() {
     }, 0);
     const handleLayerKeys = (event: KeyboardEvent) => {
       if (event.key === "Escape") {
+        if (document.querySelector(".story-lightbox")) return;
         if (searchOpen) setSearchOpen(false);
         else closeOverlay();
         return;
       }
       if (event.key !== "Tab") return;
-      const layer = document.querySelector<HTMLElement>("[data-focus-layer], .story-overlay, .province-panel");
+      const layer = document.querySelector<HTMLElement>(".story-lightbox") || document.querySelector<HTMLElement>("[data-focus-layer], .story-overlay, .province-panel");
       const focusable = layer ? Array.from(layer.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])')).filter((item) => item.offsetParent !== null) : [];
       if (!focusable.length) { event.preventDefault(); layer?.focus(); return; }
       const first = focusable[0]; const last = focusable[focusable.length - 1];
