@@ -964,6 +964,7 @@ export default function TravelAtlas() {
   const [stats, setStats] = useState<AtlasStats>(hasSupabaseEnv ? emptyStats : demoStats);
   const [usingDemoData, setUsingDemoData] = useState(!hasSupabaseEnv);
   const [atlasLoading, setAtlasLoading] = useState(false);
+  const [atlasReady, setAtlasReady] = useState(!hasSupabaseEnv);
   const [atlasError, setAtlasError] = useState("");
   const [unreadCount, setUnreadCount] = useState(0);
   const previousFocus = useRef<HTMLElement | null>(null);
@@ -1136,6 +1137,7 @@ export default function TravelAtlas() {
     const supabase = createSupabaseBrowserClient();
     if (!supabase) return;
     setAtlasLoading(true);
+    setAtlasReady(false);
     setAtlasError("");
     const [provinceResult, storyResult, photoResult, wishResult] = await Promise.all([
       supabase.from("provinces").select("code, name, status, expected_at"),
@@ -1158,6 +1160,7 @@ export default function TravelAtlas() {
       setPublishedStories(initialDemoStories);
       setStats(demoStats);
       setUsingDemoData(true);
+      setAtlasReady(true);
       setAtlasLoading(false);
       return;
     }
@@ -1230,6 +1233,7 @@ export default function TravelAtlas() {
       photos: (photoResult.data || []).filter((photo) => nextAdminStories.some((item) => item.id === photo.story_id && item.isPublished)).length,
     });
     setUsingDemoData(false);
+    setAtlasReady(!(storyResult.error || photoResult.error || wishResult.error));
     setAtlasLoading(false);
   }, []);
 
@@ -1254,6 +1258,29 @@ export default function TravelAtlas() {
     window.addEventListener("popstate", applyLocation);
     return () => { window.clearTimeout(task); window.removeEventListener("popstate", applyLocation); };
   }, [applyLocation]);
+
+  useEffect(() => {
+    if (!atlasReady) return;
+    const task = window.setTimeout(() => {
+      if (story && !publishedStories.some((item) => item.id === story)) {
+        window.history.replaceState({}, "", "/map");
+        setStory(undefined);
+        setView("map");
+        return;
+      }
+      if (province) {
+        const currentStatus = statuses[province.name];
+        if (!currentStatus || currentStatus === "unplanned") {
+          window.history.replaceState({}, "", "/map");
+          setProvince(undefined);
+          setView("map");
+        } else if (currentStatus !== province.status) {
+          setProvince({ name: province.name, status: currentStatus });
+        }
+      }
+    }, 0);
+    return () => window.clearTimeout(task);
+  }, [atlasReady, province, publishedStories, statuses, story]);
 
   useEffect(() => {
     if (!province && !story && !searchOpen) return;
