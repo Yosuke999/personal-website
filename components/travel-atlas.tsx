@@ -51,6 +51,8 @@ const demoStats: AtlasStats = {
 };
 const emptyStats: AtlasStats = { visited: 0, planned: 0, stories: 0, photos: 0 };
 const twoDigits = (value: number) => String(value).padStart(2, "0");
+const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
+const isAllowedImage = (file: File) => allowedImageTypes.has(file.type);
 
 const shortProvince = (name: string) => name.replace(/省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区/g, "");
 
@@ -481,9 +483,12 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
   function chooseFiles(list: FileList | null) {
     if (!list) return;
     const remaining = targetType === "story" ? Math.max(0, 2 - uploadedStoryImageCount - files.length) : Math.max(0, 2 - files.length);
-    const selected = Array.from(list).filter((file) => file.size <= 5 * 1024 * 1024).slice(0, remaining);
+    const candidates = Array.from(list);
+    const hasInvalidType = candidates.some((file) => !isAllowedImage(file));
+    const selected = candidates.filter((file) => isAllowedImage(file) && file.size <= 5 * 1024 * 1024).slice(0, remaining);
     setFiles((current) => [...current, ...selected.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
-    if (selected.length !== list.length) setMessage(targetType === "story" ? "每位用户在每篇故事下累计最多上传2张图片，单张不超过5MB。" : "每条留言最多上传2张图片，单张不超过5MB。");
+    if (hasInvalidType) setMessage("仅支持 JPG、PNG 或 WebP 图片。");
+    else if (selected.length !== list.length) setMessage(targetType === "story" ? "每位用户在每篇故事下累计最多上传2张图片，单张不超过5MB。" : "每条留言最多上传2张图片，单张不超过5MB。");
   }
 
   async function send() {
@@ -592,6 +597,7 @@ function ProfilePage({ user, onUpdated, onOpenNotifications }: { user: AppUser; 
 
   async function uploadAvatar(file?: File) {
     if (!file || !user.id) return;
+    if (!isAllowedImage(file)) { setMessage("头像仅支持 JPG、PNG 或 WebP 图片。"); return; }
     if (file.size > 5 * 1024 * 1024) { setMessage("头像不能超过 5MB。"); return; }
     setBusy(true); setMessage("");
     const supabase = createSupabaseBrowserClient();
@@ -732,6 +738,7 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
 
   function chooseCover(file?: File) {
     if (!file) return;
+    if (!isAllowedImage(file)) { setMessage("封面仅支持 JPG、PNG 或 WebP 图片。"); return; }
     if (file.size > 15 * 1024 * 1024) { setMessage("封面图片不能超过 15MB。"); return; }
     if (coverPreview) URL.revokeObjectURL(coverPreview);
     setCoverFile(file);
@@ -740,9 +747,12 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
 
   function chooseGallery(files: FileList | null) {
     if (!files) return;
-    const selected = Array.from(files).filter((file) => file.size <= 15 * 1024 * 1024).slice(0, 12 - pendingPhotos.length);
+    const candidates = Array.from(files);
+    const hasInvalidType = candidates.some((file) => !isAllowedImage(file));
+    const selected = candidates.filter((file) => isAllowedImage(file) && file.size <= 15 * 1024 * 1024).slice(0, 12 - pendingPhotos.length);
     setPendingPhotos((current) => [...current, ...selected.map((file) => ({ file, preview: URL.createObjectURL(file), captionTitle: "", captionStory: "" }))]);
-    if (selected.length !== files.length) setMessage("单张图片需小于 15MB，每次最多添加 12 张。");
+    if (hasInvalidType) setMessage("照片集仅支持 JPG、PNG 或 WebP 图片。");
+    else if (selected.length !== files.length) setMessage("单张图片需小于 15MB，每次最多添加 12 张。");
   }
 
   function updatePendingPhoto(index: number, patch: Partial<PendingPhoto>) {
@@ -1027,7 +1037,7 @@ function AdminPhotoLibraryPage({ photos, onBack, onUpdated }: { photos: AdminPho
     <section className="photo-library-list">{visible.map((photo) => {
       const siblings = items.filter((item) => item.storyId === photo.storyId).sort((a, b) => a.sortOrder - b.sortOrder);
       const position = siblings.findIndex((item) => item.id === photo.id);
-      return <article className="photo-admin-card glass-panel" key={photo.id}><img src={photo.url} alt={photo.captionTitle || photo.storyTitle} /><div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id}><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
+      return <article className="photo-admin-card glass-panel" key={photo.id}><img src={photo.url} alt={photo.captionTitle || photo.storyTitle} /><div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id} aria-label="保存照片说明"><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
     })}{!visible.length && <div className="empty-state glass-panel">{items.length ? "没有符合条件的照片" : "目前还没有上传照片"}</div>}</section>
   </div>;
 }
