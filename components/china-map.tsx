@@ -98,6 +98,7 @@ export default function ChinaMap({
               className={`province province-${status}`}
               tabIndex={status === "unplanned" ? -1 : 0}
               role="button"
+              aria-disabled={status === "unplanned"}
               aria-label={`${name} · ${statusLabel[status]}`}
               onClick={() => status !== "unplanned" && onSelect(name, status)}
               onKeyDown={(event) => event.key === "Enter" && status !== "unplanned" && onSelect(name, status)}

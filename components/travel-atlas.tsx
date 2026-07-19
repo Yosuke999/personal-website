@@ -700,6 +700,19 @@ function ProvinceAdminPage({ statuses, onBack, onUpdated }: { statuses: Record<s
   </div>;
 }
 
+function AdminStoryRouteStatePage({ state, onBack }: { state: "loading" | "missing" | "error"; onBack: () => void }) {
+  const content = state === "loading"
+    ? { eyebrow: "LOADING JOURNAL", title: "正在读取旅行故事", description: "正在确认故事内容，请稍候。", detail: "旅行数据加载完成后会自动打开编辑页面。" }
+    : state === "error"
+      ? { eyebrow: "JOURNAL UNAVAILABLE", title: "暂时无法读取故事", description: "旅行数据加载失败，目前无法确认这篇故事。", detail: "请返回管理后台后重试，避免误创建重复内容。" }
+      : { eyebrow: "JOURNAL NOT FOUND", title: "故事不存在", description: "这篇旅行故事可能已被删除，或者链接地址不正确。", detail: "请从管理后台的内容列表重新选择需要编辑的故事。" };
+
+  return <div className="page admin-page story-editor-page">
+    <header className="page-header"><div><button className="back-link" onClick={onBack}><ArrowLeft size={16} />返回管理后台</button><div className="eyebrow"><span />{content.eyebrow}</div><h1>{content.title}</h1><p>{content.description}</p></div></header>
+    <section className="content-empty glass-panel"><Compass size={26} /><strong>{content.title}</strong><p>{content.detail}</p>{state !== "loading" && <button className="primary-button" onClick={onBack}>返回管理后台</button>}</section>
+  </div>;
+}
+
 function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: ProvinceOption[]; story?: AdminStoryRecord; onBack: () => void; onSaved: () => Promise<void> }) {
   const availableProvinces = provinces.filter((province) => province.status === "visited");
   const initialTravelDate = (story?.traveledAt || "").split("-");
@@ -1478,13 +1491,19 @@ export default function TravelAtlas() {
     if (view === "profile") return <ProfilePage user={user} onUpdated={refreshCurrentUser} onOpenNotifications={() => navigateView("notifications")} />;
     if (view === "admin" && user.admin) return <AdminPage stats={stats} provinceCount={provinceOptions.length} stories={adminStories} onManageProvinces={() => navigateView("admin-provinces")} onManagePlans={() => navigateView("admin-plans")} onManagePhotos={() => navigateView("admin-photos")} onManageComments={() => navigateView("admin-comments")} onManageUsers={() => navigateView("admin-users")} onNewStory={() => { setSelectedAdminStoryId(undefined); navigateView("admin-story-new"); }} onEditStory={(id) => { setSelectedAdminStoryId(id); window.history.pushState({}, "", `/admin/stories/${id}`); setView("admin-story-new"); }} />;
     if (view === "admin-provinces" && user.admin) return <ProvinceAdminPage key={Object.entries(statuses).sort(([left], [right]) => left.localeCompare(right)).map(([name, status]) => `${name}:${status}`).join("|")} statuses={statuses} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
-    if (view === "admin-story-new" && user.admin) return <StoryEditorPage key={`${selectedAdminStoryId || "new"}:${adminStories.some((item) => item.id === selectedAdminStoryId) ? "ready" : "loading"}:${provinceOptions.length}`} provinces={provinceOptions} story={adminStories.find((item) => item.id === selectedAdminStoryId)} onBack={() => navigateView("admin")} onSaved={loadAtlasData} />;
+    if (view === "admin-story-new" && user.admin) {
+      const selectedAdminStory = adminStories.find((item) => item.id === selectedAdminStoryId);
+      if (selectedAdminStoryId && atlasError) return <AdminStoryRouteStatePage state="error" onBack={() => navigateView("admin")} />;
+      if (selectedAdminStoryId && !atlasReady) return <AdminStoryRouteStatePage state="loading" onBack={() => navigateView("admin")} />;
+      if (selectedAdminStoryId && !selectedAdminStory) return <AdminStoryRouteStatePage state="missing" onBack={() => navigateView("admin")} />;
+      return <StoryEditorPage key={`${selectedAdminStoryId || "new"}:${selectedAdminStory ? "ready" : "new"}:${provinceOptions.length}`} provinces={provinceOptions} story={selectedAdminStory} onBack={() => navigateView("admin")} onSaved={loadAtlasData} />;
+    }
     if (view === "admin-comments" && user.admin) return <AdminCommentsPage onBack={() => navigateView("admin")} />;
     if (view === "admin-users" && user.admin) return <AdminUsersPage currentUserId={user.id} onBack={() => navigateView("admin")} />;
     if (view === "admin-photos" && user.admin) return <AdminPhotoLibraryPage key={adminPhotos.map((photo) => photo.id).join("|")} photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     if (view === "admin-plans" && user.admin) return <AdminPlansPage key={JSON.stringify(plans)} plans={Object.values(plans)} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     return <MapHome statuses={statuses} stats={stats} stories={publishedStories} usingDemoData={usingDemoData} onProvince={openProvince} onStory={openStory} onNavigate={navigateView} onSearch={openSearch} />;
-  }, [adminPhotos, adminStories, loadAtlasData, navigateUrl, navigateView, openProvince, openSearch, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
+  }, [adminPhotos, adminStories, atlasError, atlasReady, loadAtlasData, navigateUrl, navigateView, openProvince, openSearch, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
   if (!authReady) return <main className="auth-loading"><Brand /><span>正在确认访问权限…</span></main>;
   if (recoveryMode) return <PasswordRecoveryPage tokenHash={recoveryTokenHash} onTokenConsumed={() => setRecoveryTokenHash(undefined)} onComplete={(message) => { setRecoveryMode(false); setRecoveryTokenHash(undefined); setUser(null); setAuthMessage(message); }} onCancel={cancelRecovery} />;
   if (!user) return <AuthGate onEnter={enter} initialMessage={authMessage} />;
