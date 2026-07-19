@@ -603,6 +603,15 @@ input::placeholder,textarea::placeholder{
   .story-lightbox-next{right:calc(50% - 58px)}
 }
 
+.story-visual:has(img):after{
+  width:auto;
+  height:auto;
+  left:0;
+  bottom:0;
+  transform:none;
+  box-shadow:none;
+}
+
 @media(prefers-reduced-motion:reduce){
   .story-progress span,.story-photo-button img,.story-photo-button>span{
     transition:none;
