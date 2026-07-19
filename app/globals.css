@@ -645,6 +645,15 @@ input::placeholder,textarea::placeholder{
   flex:none;
 }
 
+.admin-story-cover{
+  width:100%;
+  height:54px;
+  display:block;
+  object-fit:cover;
+  border-radius:var(--radius-xs);
+  background:#111718;
+}
+
 @media(prefers-reduced-motion:reduce){
   .story-progress span,.story-photo-button img,.story-photo-button>span{
     transition:none;

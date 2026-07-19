@@ -21,7 +21,7 @@ type ProvinceOption = { code: string; name: string; status: ProvinceStatus; expe
 type ProvincePlan = { provinceCode: string; provinceName: string; expectedAt: string; wishes: string[] };
 type AdminStoryRecord = {
   id: string; provinceCode: string; provinceName: string; title: string; slug: string;
-  coverPath: string | null; traveledAt: string; citySpots: string[]; body: string;
+  coverPath: string | null; coverUrl?: string; traveledAt: string; citySpots: string[]; body: string;
   verdict: "worth_it" | "depends" | "not_recommended"; rating: number;
   pros: string[]; cons: string[]; isPublished: boolean;
 };
@@ -1058,7 +1058,7 @@ function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManageP
     <header className="page-header"><div><div className="eyebrow"><span />OWNER CONTROL</div><h1>管理后台</h1><p>欢迎回来，Yosuke。你的足迹仍在继续。</p></div><button className="primary-button" onClick={onNewStory}><Plus size={17} />发布新故事</button></header>
     <div className="admin-stats">{items.map(([label, value, Icon], index) => <div className="glass-panel" key={label}><div><Icon /><small>{label}</small></div><strong>{value}</strong><span>0{index + 1}</span></div>)}</div>
     <div className="admin-grid"><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">CONTENT</span><h2>最近内容</h2></div><span className="section-count">共 {stories.length} 篇</span></div>
-      {stories.map((story) => <div className="admin-story" key={story.id}><div className="mini-cover blue" /><div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
+      {stories.map((story) => <div className="admin-story" key={story.id}>{story.coverUrl ? <img className="admin-story-cover" src={story.coverUrl} alt="" /> : <div className="mini-cover blue" />}<div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
       {!stories.length && <div className="empty-state">还没有真实故事，创建第一篇旅行记录吧。</div>}
       <button className="admin-add" onClick={onNewStory}><Plus />创建新的旅行记录</button>
     </section><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">MODERATION</span><h2>内容管理</h2></div></div><p className="admin-section-copy">查看全站留言，处理不合适的文字和图片内容。</p><button className="text-button full" onClick={onManageComments}>进入留言审核 <ArrowRight /></button></section></div>
@@ -1316,7 +1316,6 @@ export default function TravelAtlas() {
       cons: item.cons || [],
       isPublished: item.is_published,
     }));
-    setAdminStories(nextAdminStories);
     const mediaPaths = Array.from(new Set([
       ...nextAdminStories.map((item) => item.coverPath).filter((path): path is string => Boolean(path)),
       ...(photoResult.data || []).map((photo) => photo.storage_path),
@@ -1326,6 +1325,10 @@ export default function TravelAtlas() {
       const { data: signedMedia } = await supabase.storage.from("travel-media").createSignedUrls(mediaPaths, 60 * 60);
       for (const item of signedMedia || []) if (item.path && item.signedUrl) signedUrlByPath[item.path] = item.signedUrl;
     }
+    setAdminStories(nextAdminStories.map((item) => ({
+      ...item,
+      coverUrl: item.coverPath ? signedUrlByPath[item.coverPath] : undefined,
+    })));
     const storyTitleById = Object.fromEntries(nextAdminStories.map((item) => [item.id, item.title]));
     setAdminPhotos((photoResult.data || []).map((photo) => ({
       id: photo.id,
