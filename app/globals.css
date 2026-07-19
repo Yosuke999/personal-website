@@ -612,6 +612,28 @@ input::placeholder,textarea::placeholder{
   box-shadow:none;
 }
 
+.avatar{
+  flex:0 0 36px;
+  min-width:36px;
+  aspect-ratio:1;
+  overflow:hidden;
+  box-sizing:border-box;
+}
+
+.avatar.small{
+  flex-basis:30px;
+  min-width:30px;
+}
+
+.profile-avatar{
+  flex-basis:80px;
+  min-width:80px;
+}
+
+.profile-cover button{
+  flex:none;
+}
+
 @media(prefers-reduced-motion:reduce){
   .story-progress span,.story-photo-button img,.story-photo-button>span{
     transition:none;
