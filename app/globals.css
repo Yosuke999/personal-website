@@ -654,6 +654,243 @@ input::placeholder,textarea::placeholder{
   background:#111718;
 }
 
+.story-card-footer{
+  gap:10px;
+}
+
+.story-card-footer>.story-card-labels{
+  display:flex;
+  align-items:center;
+  flex-wrap:wrap;
+  gap:6px;
+  min-width:0;
+  margin-left:0;
+  color:inherit;
+}
+
+.story-verdict,.story-feature-tag{
+  border:1px solid var(--line);
+  border-radius:999px;
+  padding:5px 8px;
+  font-size:8px;
+  line-height:1;
+  white-space:nowrap;
+}
+
+.story-verdict{
+  color:var(--aqua);
+  border-color:rgba(94,231,213,.22);
+  background:rgba(94,231,213,.055);
+}
+
+.story-feature-tag{
+  max-width:150px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  color:#b9c2c0;
+  background:rgba(255,255,255,.035);
+}
+
+.story-card-footer>.story-card-stars{
+  display:flex;
+  flex:none;
+  margin-left:auto;
+  color:var(--amber);
+}
+
+.quick-filter{
+  display:none;
+}
+
+.sidebar nav button:focus-visible span,.admin-nav button:focus-visible span{
+  opacity:1;
+  transform:none;
+}
+
+@media(max-width:760px){
+  .map-dashboard{
+    overflow:hidden;
+  }
+
+  .map-copy{
+    padding:24px 20px 2px;
+  }
+
+  .map-copy p{
+    max-width:260px;
+  }
+
+  .map-stage{
+    height:470px;
+    padding:0;
+    margin:0 -5px;
+    overflow:hidden;
+  }
+
+  .map-stage .china-map{
+    width:116%;
+    height:116%;
+    max-width:none;
+    transform:scale(1.08);
+    transform-origin:center;
+  }
+
+  .map-stats{
+    position:relative;
+    z-index:2;
+    background:rgba(7,10,11,.72);
+  }
+
+  .province-quick-links{
+    gap:14px;
+  }
+
+  .province-quick-links>.quick-filter{
+    display:grid;
+    grid-template-columns:repeat(3,1fr);
+    gap:7px;
+    width:100%;
+  }
+
+  .quick-filter button{
+    min-height:38px;
+    border:1px solid var(--line);
+    border-radius:999px;
+    background:rgba(255,255,255,.02);
+    color:#788280;
+    font-size:10px;
+  }
+
+  .quick-filter button.active{
+    border-color:rgba(94,231,213,.35);
+    background:rgba(94,231,213,.09);
+    color:var(--aqua);
+  }
+
+  .province-quick-links>.quick-link-list{
+    display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr));
+    gap:8px;
+    width:100%;
+  }
+
+  .quick-link{
+    width:100%;
+    min-width:0;
+  }
+
+  .recent-section{
+    margin-top:58px;
+    padding-top:26px;
+    border-top:1px solid rgba(255,255,255,.055);
+  }
+
+  .story-grid{
+    gap:16px;
+  }
+
+  .story-card{
+    border-radius:14px;
+  }
+
+  .story-visual{
+    height:178px;
+    padding:16px;
+  }
+
+  .story-card-body{
+    min-height:0;
+    padding:18px;
+  }
+
+  .story-card h3{
+    margin:11px 0 8px;
+    font-size:19px;
+  }
+
+  .story-card p{
+    display:-webkit-box;
+    overflow:hidden;
+    -webkit-box-orient:vertical;
+    -webkit-line-clamp:2;
+    line-clamp:2;
+    line-height:1.65;
+  }
+
+  .story-card-footer{
+    margin-top:15px;
+    padding-top:13px;
+  }
+
+  .story-feature-tag{
+    max-width:112px;
+  }
+
+  .story-card-footer button{
+    margin-left:0;
+  }
+
+  .modal-shell{
+    display:block;
+    background:#070a0b;
+  }
+
+  .modal-shell>.modal-backdrop{
+    display:none;
+  }
+
+  .province-panel{
+    position:fixed;
+    inset:0;
+    width:100%;
+    max-width:none;
+    height:100svh;
+    border:0;
+    border-radius:0;
+    overscroll-behavior:contain;
+    animation:provincePageIn .28s ease;
+  }
+
+  .panel-close{
+    position:fixed;
+    top:max(15px,env(safe-area-inset-top));
+    right:15px;
+    width:42px;
+    height:42px;
+    border-radius:50%;
+    background:rgba(5,8,9,.62);
+    backdrop-filter:blur(14px);
+  }
+
+  .province-hero{
+    min-height:250px;
+    height:32svh;
+    max-height:310px;
+    padding:58px 24px 28px;
+  }
+
+  .panel-summary{
+    position:sticky;
+    top:0;
+    z-index:2;
+    background:rgba(9,13,14,.94);
+    backdrop-filter:blur(15px);
+  }
+
+  .panel-summary div{
+    padding:17px 10px;
+  }
+
+  .panel-content{
+    padding-bottom:max(36px,calc(env(safe-area-inset-bottom) + 24px));
+  }
+}
+
+@keyframes provincePageIn{
+  from{opacity:.4;transform:translateY(24px)}
+  to{opacity:1;transform:none}
+}
+
 @media(prefers-reduced-motion:reduce){
   .story-progress span,.story-photo-button img,.story-photo-button>span{
     transition:none;
