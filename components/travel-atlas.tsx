@@ -13,7 +13,7 @@ import ChinaMap from "@/components/china-map";
 import { demoStories, plannedTrips, provinceStatus, type ProvinceStatus } from "@/data/demo";
 import { createSupabaseBrowserClient, hasSupabaseEnv } from "@/lib/supabase/browser";
 
-type View = "map" | "wall" | "notifications" | "profile" | "admin" | "admin-provinces" | "admin-story-new" | "admin-comments" | "admin-users" | "admin-photos" | "admin-plans";
+type View = "map" | "wall" | "notifications" | "profile" | "admin" | "admin-provinces" | "admin-story-new" | "admin-comments" | "admin-users" | "admin-photos" | "admin-plans" | "admin-optimize";
 type AuthMode = "login" | "register" | "forgot";
 type AppUser = { id?: string; email: string; name: string; avatarPath?: string | null; avatarUrl?: string; admin: boolean };
 type AtlasStats = { visited: number; planned: number; stories: number; photos: number };
@@ -53,6 +53,47 @@ const emptyStats: AtlasStats = { visited: 0, planned: 0, stories: 0, photos: 0 }
 const twoDigits = (value: number) => String(value).padStart(2, "0");
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const isAllowedImage = (file: File) => allowedImageTypes.has(file.type);
+const immutableImageCache = "31536000";
+
+type ImageOptimizationOptions = {
+  maxWidth: number;
+  maxHeight: number;
+  maxBytes: number;
+  quality?: number;
+  forceWebp?: boolean;
+};
+
+async function optimizeImageFile(file: File, options: ImageOptimizationOptions) {
+  const bitmap = await createImageBitmap(file);
+  try {
+    const initialScale = Math.min(1, options.maxWidth / bitmap.width, options.maxHeight / bitmap.height);
+    let width = Math.max(1, Math.round(bitmap.width * initialScale));
+    let height = Math.max(1, Math.round(bitmap.height * initialScale));
+    let quality = options.quality ?? 0.8;
+    let optimized: Blob | null = null;
+
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const context = canvas.getContext("2d");
+      if (!context) throw new Error("浏览器无法处理这张图片");
+      context.drawImage(bitmap, 0, 0, width, height);
+      optimized = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, "image/webp", quality));
+      if (!optimized) throw new Error("图片压缩失败");
+      if (optimized.size <= options.maxBytes) break;
+      quality = Math.max(0.52, quality - 0.07);
+      width = Math.max(1, Math.round(width * 0.88));
+      height = Math.max(1, Math.round(height * 0.88));
+    }
+
+    if (!optimized || (!options.forceWebp && optimized.size >= file.size && file.size <= options.maxBytes)) return file;
+    const fileName = file.name.replace(/\.[^.]+$/, "") || "image";
+    return new File([optimized], `${fileName}.webp`, { type: "image/webp", lastModified: Date.now() });
+  } finally {
+    bitmap.close();
+  }
+}
 
 const shortProvince = (name: string) => name.replace(/省|市|壮族自治区|回族自治区|维吾尔自治区|自治区|特别行政区/g, "");
 
@@ -289,7 +330,7 @@ function Sidebar({ view, setView, name, avatarUrl, admin, unreadCount, onSearch,
 
 function StoryCard({ story, onOpen }: { story: AtlasStory; onOpen: () => void }) {
   return <article className={`story-card story-${story.tone}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(); }}>
-    <div className="story-visual">{story.coverUrl && <img src={story.coverUrl} alt="" />}<span>TRAVEL JOURNAL</span><MapPin size={22} /></div>
+    <div className="story-visual">{story.coverUrl && <img src={story.coverUrl} alt="" loading="lazy" decoding="async" />}<span>TRAVEL JOURNAL</span><MapPin size={22} /></div>
     <div className="story-card-body"><div className="story-meta"><span>{story.date}</span><span>{story.city}</span></div><h3>{story.title}</h3><p>{story.excerpt}</p><div className="story-card-footer"><div className="story-card-labels"><span className="story-verdict">{story.verdict}</span>{story.pros[0] && <span className="story-feature-tag">{story.pros[0]}</span>}</div><div className="story-card-stars" aria-label={`${story.rating} 星评分`}>{Array.from({ length: 5 }).map((_, i) => <Star key={i} size={13} fill={i < story.rating ? "currentColor" : "none"} />)}</div><button aria-label="查看故事"><ArrowRight size={17} /></button></div></div>
   </article>;
 }
@@ -332,7 +373,7 @@ function ProvincePanel({ province, status, plan, allStories, user, onClose, onSt
   const wishes = plan?.wishes || [];
   const photoCount = stories.reduce((total, item) => total + item.photos.length, 0);
   const averageRating = stories.length ? (stories.reduce((total, item) => total + item.rating, 0) / stories.length).toFixed(1) : "—";
-  return <div className="modal-shell"><button className="modal-backdrop" onClick={onClose} aria-label="关闭" /><section className="province-panel glass-panel" role="dialog" aria-modal="true" aria-label={`${shortProvince(province)}省份详情`} data-focus-layer tabIndex={-1}><button className="panel-close" onClick={onClose} aria-label="关闭省份详情"><X /></button><div className="province-hero"><small>{status === "visited" ? "VISITED PROVINCE" : "NEXT DESTINATION"}</small><h2>{shortProvince(province)}</h2><p>{status === "visited" ? "山川、街巷，以及那些只属于当时的风。" : "把想去的地方写下来，出发就有了方向。"}</p></div>{status === "visited" ? <><div className="panel-summary"><div><strong>{stories.length}</strong><small>旅行故事</small></div><div><strong>{photoCount}</strong><small>照片记录</small></div><div><strong>{averageRating}</strong><small>综合评分</small></div></div><div className="panel-content"><h3>旅行记录</h3>{stories.length ? stories.map((story) => <button className="panel-story" key={story.id} onClick={() => onStory(story.id)}>{story.coverUrl ? <img className="mini-cover-image" src={story.coverUrl} alt="" /> : <div className={`mini-cover ${story.tone}`} />}<div><small>{story.date}</small><strong>{story.title}</strong><span>{story.city}</span></div><ChevronRight /></button>) : <div className="empty-state">该省份还没有已发布的故事</div>}<CommentComposer user={user} targetType="province" targetId={province} compact /></div></> : <div className="panel-content"><h3>旅行愿望清单</h3><div className="wish-list">{wishes.map((wish, index) => <div key={`${wish}-${index}`}><span>{twoDigits(index + 1)}</span><strong>{wish}</strong><Check size={15} /></div>)}{!wishes.length && <div className="empty-state">愿望清单还在酝酿中</div>}</div><div className="plan-time"><small>预计出行时间</small><strong>{plan?.expectedAt || "时间待定"}</strong></div><CommentComposer user={user} targetType="plan" targetId={province} compact title="朋友推荐区" /></div>}</section></div>;
+  return <div className="modal-shell"><button className="modal-backdrop" onClick={onClose} aria-label="关闭" /><section className="province-panel glass-panel" role="dialog" aria-modal="true" aria-label={`${shortProvince(province)}省份详情`} data-focus-layer tabIndex={-1}><button className="panel-close" onClick={onClose} aria-label="关闭省份详情"><X /></button><div className="province-hero"><small>{status === "visited" ? "VISITED PROVINCE" : "NEXT DESTINATION"}</small><h2>{shortProvince(province)}</h2><p>{status === "visited" ? "山川、街巷，以及那些只属于当时的风。" : "把想去的地方写下来，出发就有了方向。"}</p></div>{status === "visited" ? <><div className="panel-summary"><div><strong>{stories.length}</strong><small>旅行故事</small></div><div><strong>{photoCount}</strong><small>照片记录</small></div><div><strong>{averageRating}</strong><small>综合评分</small></div></div><div className="panel-content"><h3>旅行记录</h3>{stories.length ? stories.map((story) => <button className="panel-story" key={story.id} onClick={() => onStory(story.id)}>{story.coverUrl ? <img className="mini-cover-image" src={story.coverUrl} alt="" loading="lazy" decoding="async" /> : <div className={`mini-cover ${story.tone}`} />}<div><small>{story.date}</small><strong>{story.title}</strong><span>{story.city}</span></div><ChevronRight /></button>) : <div className="empty-state">该省份还没有已发布的故事</div>}<CommentComposer user={user} targetType="province" targetId={province} compact /></div></> : <div className="panel-content"><h3>旅行愿望清单</h3><div className="wish-list">{wishes.map((wish, index) => <div key={`${wish}-${index}`}><span>{twoDigits(index + 1)}</span><strong>{wish}</strong><Check size={15} /></div>)}{!wishes.length && <div className="empty-state">愿望清单还在酝酿中</div>}</div><div className="plan-time"><small>预计出行时间</small><strong>{plan?.expectedAt || "时间待定"}</strong></div><CommentComposer user={user} targetType="plan" targetId={province} compact title="朋友推荐区" /></div>}</section></div>;
 }
 
 function StoryDetail({ id, stories, user, onClose }: { id: string; stories: AtlasStory[]; user: AppUser; onClose: () => void }) {
@@ -483,13 +524,19 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     return () => window.clearTimeout(task);
   }, [loadComments]);
 
-  function chooseFiles(list: FileList | null) {
+  async function chooseFiles(list: FileList | null) {
     if (!list) return;
     const remaining = targetType === "story" ? Math.max(0, 2 - uploadedStoryImageCount - files.length) : Math.max(0, 2 - files.length);
     const candidates = Array.from(list);
     const hasInvalidType = candidates.some((file) => !isAllowedImage(file));
     const selected = candidates.filter((file) => isAllowedImage(file) && file.size <= 5 * 1024 * 1024).slice(0, remaining);
-    setFiles((current) => [...current, ...selected.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
+    try {
+      const optimized = await Promise.all(selected.map((file) => optimizeImageFile(file, { maxWidth: 1280, maxHeight: 1280, maxBytes: 450 * 1024, quality: 0.76 })));
+      setFiles((current) => [...current, ...optimized.map((file) => ({ file, preview: URL.createObjectURL(file) }))]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "图片压缩失败，请更换图片后重试。");
+      return;
+    }
     if (hasInvalidType) setMessage("仅支持 JPG、PNG 或 WebP 图片。");
     else if (selected.length !== list.length) setMessage(targetType === "story" ? "每位用户在每篇故事下累计最多上传2张图片，单张不超过5MB。" : "每条留言最多上传2张图片，单张不超过5MB。");
   }
@@ -504,7 +551,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     for (const [index, item] of files.entries()) {
       const extension = item.file.name.split(".").pop()?.toLowerCase() || "jpg";
       const path = `${user.id}/${comment.id}/image-${Date.now()}-${index}.${extension}`;
-      const { error: uploadError } = await supabase.storage.from("comment-media").upload(path, item.file, { contentType: item.file.type });
+      const { error: uploadError } = await supabase.storage.from("comment-media").upload(path, item.file, { contentType: item.file.type, cacheControl: immutableImageCache });
       if (uploadError) { setMessage(`留言已发送，但图片上传失败：${uploadError.message}`); break; }
       const { error: imageError } = await supabase.from("comment_images").insert({ comment_id: comment.id, owner_id: user.id, storage_path: path });
       if (imageError) { await supabase.storage.from("comment-media").remove([path]); setMessage(`留言已发送，但图片记录失败：${imageError.message}`); break; }
@@ -514,7 +561,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     await loadComments();
   }
 
-  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={comment.avatarUrl} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={image.url} alt="留言图片" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy || imageLimitReached}><ImagePlus size={17} />图片 <small>{selectedImageCount}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
+  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={comment.avatarUrl} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={image.url} alt="留言图片" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy || imageLimitReached}><ImagePlus size={17} />图片 <small>{selectedImageCount}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
 }
 
 function StoryLikeButton({ storyId, userId }: { storyId: string; userId?: string }) {
@@ -603,11 +650,19 @@ function ProfilePage({ user, onUpdated, onOpenNotifications }: { user: AppUser; 
     if (!isAllowedImage(file)) { setMessage("头像仅支持 JPG、PNG 或 WebP 图片。"); return; }
     if (file.size > 5 * 1024 * 1024) { setMessage("头像不能超过 5MB。"); return; }
     setBusy(true); setMessage("");
+    let optimizedFile: File;
+    try {
+      optimizedFile = await optimizeImageFile(file, { maxWidth: 512, maxHeight: 512, maxBytes: 180 * 1024, quality: 0.8 });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "头像压缩失败，请更换图片后重试。");
+      setBusy(false);
+      return;
+    }
     const supabase = createSupabaseBrowserClient();
     if (!supabase) { setMessage("头像上传失败：Supabase 尚未连接"); setBusy(false); return; }
-    const extension = file.name.split(".").pop()?.toLowerCase() || "jpg";
+    const extension = optimizedFile.name.split(".").pop()?.toLowerCase() || "jpg";
     const path = `${user.id}/avatar-${Date.now()}.${extension}`;
-    const { error: uploadError } = await supabase.storage.from("avatars").upload(path, file, { contentType: file.type });
+    const { error: uploadError } = await supabase.storage.from("avatars").upload(path, optimizedFile, { contentType: optimizedFile.type, cacheControl: immutableImageCache });
     if (uploadError) { setMessage(`头像上传失败：${uploadError.message}`); setBusy(false); return; }
     const { error: updateError } = await supabase.from("profiles").update({ avatar_path: path, updated_at: new Date().toISOString() }).eq("id", user.id);
     if (updateError) { await supabase.storage.from("avatars").remove([path]); setMessage(`头像保存失败：${updateError.message}`); setBusy(false); return; }
@@ -752,21 +807,34 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
     if (travelYear && value && Number(travelDay) > new Date(Number(travelYear), Number(value), 0).getDate()) setTravelDay("");
   }
 
-  function chooseCover(file?: File) {
+  async function chooseCover(file?: File) {
     if (!file) return;
     if (!isAllowedImage(file)) { setMessage("封面仅支持 JPG、PNG 或 WebP 图片。"); return; }
     if (file.size > 15 * 1024 * 1024) { setMessage("封面图片不能超过 15MB。"); return; }
+    let optimized: File;
+    try {
+      optimized = await optimizeImageFile(file, { maxWidth: 1920, maxHeight: 1280, maxBytes: 900 * 1024, quality: 0.8 });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "封面压缩失败，请更换图片后重试。");
+      return;
+    }
     if (coverPreview) URL.revokeObjectURL(coverPreview);
-    setCoverFile(file);
-    setCoverPreview(URL.createObjectURL(file));
+    setCoverFile(optimized);
+    setCoverPreview(URL.createObjectURL(optimized));
   }
 
-  function chooseGallery(files: FileList | null) {
+  async function chooseGallery(files: FileList | null) {
     if (!files) return;
     const candidates = Array.from(files);
     const hasInvalidType = candidates.some((file) => !isAllowedImage(file));
     const selected = candidates.filter((file) => isAllowedImage(file) && file.size <= 15 * 1024 * 1024).slice(0, 12 - pendingPhotos.length);
-    setPendingPhotos((current) => [...current, ...selected.map((file) => ({ file, preview: URL.createObjectURL(file), captionTitle: "", captionStory: "" }))]);
+    try {
+      const optimized = await Promise.all(selected.map((file) => optimizeImageFile(file, { maxWidth: 1920, maxHeight: 1920, maxBytes: 800 * 1024, quality: 0.8 })));
+      setPendingPhotos((current) => [...current, ...optimized.map((file) => ({ file, preview: URL.createObjectURL(file), captionTitle: "", captionStory: "" }))]);
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : "照片压缩失败，请更换图片后重试。");
+      return;
+    }
     if (hasInvalidType) setMessage("照片集仅支持 JPG、PNG 或 WebP 图片。");
     else if (selected.length !== files.length) setMessage("单张图片需小于 15MB，每次最多添加 12 张。");
   }
@@ -819,7 +887,7 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
       if (coverFile) {
         const extension = coverFile.name.split(".").pop()?.toLowerCase() || "jpg";
         const coverPath = `${storyId}/cover-${Date.now()}.${extension}`;
-        const { error: uploadError } = await supabase.storage.from("travel-media").upload(coverPath, coverFile, { contentType: coverFile.type });
+        const { error: uploadError } = await supabase.storage.from("travel-media").upload(coverPath, coverFile, { contentType: coverFile.type, cacheControl: immutableImageCache });
         if (uploadError) throw uploadError;
         const { error: coverUpdateError } = await supabase.from("stories").update({ cover_path: coverPath }).eq("id", storyId);
         if (coverUpdateError) { await supabase.storage.from("travel-media").remove([coverPath]); throw coverUpdateError; }
@@ -828,7 +896,7 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
       for (const [index, photo] of pendingPhotos.entries()) {
         const extension = photo.file.name.split(".").pop()?.toLowerCase() || "jpg";
         const storagePath = `${storyId}/gallery-${Date.now()}-${index}.${extension}`;
-        const { error: uploadError } = await supabase.storage.from("travel-media").upload(storagePath, photo.file, { contentType: photo.file.type });
+        const { error: uploadError } = await supabase.storage.from("travel-media").upload(storagePath, photo.file, { contentType: photo.file.type, cacheControl: immutableImageCache });
         if (uploadError) throw uploadError;
         const { error: photoInsertError } = await supabase.from("story_photos").insert({ story_id: storyId, storage_path: storagePath, caption_title: photo.captionTitle.trim() || null, caption_story: photo.captionStory.trim() || null, sort_order: index });
         if (photoInsertError) { await supabase.storage.from("travel-media").remove([storagePath]); throw photoInsertError; }
@@ -886,8 +954,8 @@ function StoryEditorPage({ provinces, story, onBack, onSaved }: { provinces: Pro
         <label>五星评分<select value={rating} onChange={(event) => setRating(event.target.value)}>{[5,4,3,2,1].map((score) => <option key={score} value={score}>{score} 星</option>)}</select></label>
         <label>优点标签<input value={pros} onChange={(event) => setPros(event.target.value)} placeholder="风景，自驾，日落" /></label>
         <label>缺点标签<input value={cons} onChange={(event) => setCons(event.target.value)} placeholder="拥挤，路程较长" /></label>
-        <div className="editor-wide media-editor"><div className="media-editor-heading"><div><strong>封面图</strong><small>{story?.coverPath && !coverFile ? "当前已有封面，选择新图后替换" : "建议使用横向大图，单张不超过 15MB"}</small></div><button type="button" onClick={() => coverRef.current?.click()}><ImagePlus size={16} />{coverFile ? "更换封面" : "选择封面"}</button><input ref={coverRef} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseCover(event.target.files?.[0])} /></div>{coverPreview && <img className="cover-upload-preview" src={coverPreview} alt="封面预览" />}</div>
-        <div className="editor-wide media-editor"><div className="media-editor-heading"><div><strong>照片集与照片故事</strong><small>本次待上传 {pendingPhotos.length} 张</small></div><button type="button" onClick={() => galleryRef.current?.click()}><ImagePlus size={16} />添加照片</button><input ref={galleryRef} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => chooseGallery(event.target.files)} /></div><div className="pending-photo-list">{pendingPhotos.map((photo, index) => <div className="pending-photo" key={photo.preview}><img src={photo.preview} alt={`待上传照片 ${index + 1}`} /><div><input value={photo.captionTitle} onChange={(event) => updatePendingPhoto(index, { captionTitle: event.target.value })} placeholder="照片标题（可选）" /><textarea rows={3} value={photo.captionStory} onChange={(event) => updatePendingPhoto(index, { captionStory: event.target.value })} placeholder="这张照片背后的故事（可选）" /></div><button type="button" onClick={() => removePendingPhoto(index)} aria-label={`移除第 ${index + 1} 张照片`}><X size={16} /></button></div>)}</div></div>
+        <div className="editor-wide media-editor"><div className="media-editor-heading"><div><strong>封面图</strong><small>{story?.coverPath && !coverFile ? "当前已有封面，选择新图后替换" : "上传时会自动压缩为适合网页的 WebP 图片"}</small></div><button type="button" onClick={() => coverRef.current?.click()}><ImagePlus size={16} />{coverFile ? "更换封面" : "选择封面"}</button><input ref={coverRef} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void chooseCover(event.target.files?.[0])} /></div>{coverPreview && <img className="cover-upload-preview" src={coverPreview} alt="封面预览" />}</div>
+        <div className="editor-wide media-editor"><div className="media-editor-heading"><div><strong>照片集与照片故事</strong><small>本次待上传 {pendingPhotos.length} 张，图片会自动压缩</small></div><button type="button" onClick={() => galleryRef.current?.click()}><ImagePlus size={16} />添加照片</button><input ref={galleryRef} hidden type="file" multiple accept="image/jpeg,image/png,image/webp" onChange={(event) => void chooseGallery(event.target.files)} /></div><div className="pending-photo-list">{pendingPhotos.map((photo, index) => <div className="pending-photo" key={photo.preview}><img src={photo.preview} alt={`待上传照片 ${index + 1}`} /><div><input value={photo.captionTitle} onChange={(event) => updatePendingPhoto(index, { captionTitle: event.target.value })} placeholder="照片标题（可选）" /><textarea rows={3} value={photo.captionStory} onChange={(event) => updatePendingPhoto(index, { captionStory: event.target.value })} placeholder="这张照片背后的故事（可选）" /></div><button type="button" onClick={() => removePendingPhoto(index)} aria-label={`移除第 ${index + 1} 张照片`}><X size={16} /></button></div>)}</div></div>
       </div>
       {message && <div className="admin-feedback" role="status">{message}</div>}
       <div className="editor-actions">{story && <button className={confirmDelete ? "danger-button confirmed" : "danger-button"} onClick={() => void deleteStory()} disabled={Boolean(submitting)}>{confirmDelete ? "确认删除" : "删除故事"}</button>}<span /><button onClick={() => void save("draft")} disabled={Boolean(submitting)}>{submitting === "draft" ? "保存中…" : "保存草稿"}</button><button className="primary-button" onClick={() => void save("publish")} disabled={Boolean(submitting)}>{submitting === "publish" ? "发布中…" : "发布故事"}<ArrowRight size={16} /></button></div>
@@ -1053,12 +1121,99 @@ function AdminPhotoLibraryPage({ photos, onBack, onUpdated }: { photos: AdminPho
     <section className="photo-library-list">{visible.map((photo) => {
       const siblings = items.filter((item) => item.storyId === photo.storyId).sort((a, b) => a.sortOrder - b.sortOrder);
       const position = siblings.findIndex((item) => item.id === photo.id);
-      return <article className="photo-admin-card glass-panel" key={photo.id}><img src={photo.url} alt={photo.captionTitle || photo.storyTitle} /><div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id} aria-label="保存照片说明"><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
+      return <article className="photo-admin-card glass-panel" key={photo.id}><img src={photo.url} alt={photo.captionTitle || photo.storyTitle} loading="lazy" decoding="async" /><div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id} aria-label="保存照片说明"><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
     })}{!visible.length && <div className="empty-state glass-panel">{items.length ? "没有符合条件的照片" : "目前还没有上传照片"}</div>}</section>
   </div>;
 }
 
-function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManagePlans, onManagePhotos, onManageComments, onManageUsers, onNewStory, onEditStory }: { stats: AtlasStats; provinceCount: number; stories: AdminStoryRecord[]; onManageProvinces: () => void; onManagePlans: () => void; onManagePhotos: () => void; onManageComments: () => void; onManageUsers: () => void; onNewStory: () => void; onEditStory: (id: string) => void }) {
+type MediaMigrationItem =
+  | { kind: "cover"; id: string; storyId: string; storyTitle: string; storagePath: string }
+  | { kind: "photo"; id: string; storyId: string; storyTitle: string; storagePath: string };
+
+function AdminMediaOptimizerPage({ stories, photos, onBack, onUpdated }: { stories: AdminStoryRecord[]; photos: AdminPhotoRecord[]; onBack: () => void; onUpdated: () => Promise<void> }) {
+  const [running, setRunning] = useState(false);
+  const [completed, setCompleted] = useState(0);
+  const [total, setTotal] = useState(0);
+  const [currentLabel, setCurrentLabel] = useState("");
+  const [message, setMessage] = useState("");
+  const candidates = useMemo<MediaMigrationItem[]>(() => [
+    ...stories
+      .filter((story) => story.coverPath && !story.coverPath.toLowerCase().endsWith(".webp"))
+      .map((story) => ({ kind: "cover" as const, id: story.id, storyId: story.id, storyTitle: story.title, storagePath: story.coverPath! })),
+    ...photos
+      .filter((photo) => !photo.storagePath.toLowerCase().endsWith(".webp"))
+      .map((photo) => ({ kind: "photo" as const, id: photo.id, storyId: photo.storyId, storyTitle: photo.storyTitle, storagePath: photo.storagePath })),
+  ], [photos, stories]);
+
+  async function migrateItem(item: MediaMigrationItem, index: number) {
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) throw new Error("Supabase 尚未连接");
+    const { data: original, error: downloadError } = await supabase.storage.from("travel-media").download(item.storagePath);
+    if (downloadError || !original) throw new Error(downloadError?.message || "原图下载失败");
+
+    const sourceName = item.storagePath.split("/").pop() || `${item.kind}-${index}.jpg`;
+    const sourceFile = new File([original], sourceName, { type: original.type || "image/jpeg" });
+    const optimized = await optimizeImageFile(sourceFile, item.kind === "cover"
+      ? { maxWidth: 1920, maxHeight: 1280, maxBytes: 900 * 1024, quality: 0.8, forceWebp: true }
+      : { maxWidth: 1920, maxHeight: 1920, maxBytes: 800 * 1024, quality: 0.8, forceWebp: true });
+    const newPath = `${item.storyId}/optimized-${item.kind}-${crypto.randomUUID()}.webp`;
+    const { error: uploadError } = await supabase.storage.from("travel-media").upload(newPath, optimized, {
+      cacheControl: immutableImageCache,
+      contentType: "image/webp",
+      upsert: false,
+    });
+    if (uploadError) throw new Error(`压缩图上传失败：${uploadError.message}`);
+
+    const update = item.kind === "cover"
+      ? await supabase.from("stories").update({ cover_path: newPath }).eq("id", item.id).eq("cover_path", item.storagePath).select("id").maybeSingle()
+      : await supabase.from("story_photos").update({ storage_path: newPath }).eq("id", item.id).eq("storage_path", item.storagePath).select("id").maybeSingle();
+    if (update.error || !update.data) {
+      await supabase.storage.from("travel-media").remove([newPath]);
+      throw new Error(update.error?.message || "记录已发生变化，未替换原图");
+    }
+  }
+
+  async function startMigration() {
+    if (!candidates.length || running) return;
+    setRunning(true);
+    setMessage("");
+    setCompleted(0);
+    setTotal(candidates.length);
+    const failures: string[] = [];
+    for (let index = 0; index < candidates.length; index += 1) {
+      const item = candidates[index];
+      setCurrentLabel(`${item.storyTitle} · ${item.kind === "cover" ? "封面" : "照片"}`);
+      try {
+        await migrateItem(item, index);
+      } catch (error) {
+        failures.push(`${item.storyTitle}：${error instanceof Error ? error.message : "处理失败"}`);
+      }
+      setCompleted(index + 1);
+    }
+    await onUpdated();
+    setCurrentLabel("");
+    setRunning(false);
+    setMessage(failures.length
+      ? `迁移完成，成功 ${candidates.length - failures.length} 张，失败 ${failures.length} 张。失败项可直接再次运行。${failures.slice(0, 3).join("；")}`
+      : `迁移完成，共优化 ${candidates.length} 张图片。旧原图仍保留，确认页面正常后再清理。`);
+  }
+
+  const progress = total ? Math.round((completed / total) * 100) : 0;
+  return <div className="page admin-page media-optimizer-page">
+    <header className="page-header"><div><button className="back-link" onClick={onBack} disabled={running}><ArrowLeft size={16} />返回管理后台</button><div className="eyebrow"><span />MEDIA OPTIMIZER</div><h1>图片流量优化</h1><p>把现有封面和照片压缩为 WebP，降低 Supabase 流量消耗。</p></div></header>
+    <section className="glass-panel media-optimizer-card">
+      <div className="section-heading"><div><span className="section-index">SAFE MIGRATION</span><h2>可回滚迁移</h2></div><span className="section-count">待处理 {candidates.length} 张</span></div>
+      <p>新图片上传成功且数据库替换成功后才会计为完成。此次不会删除旧原图，页面验证无误后再单独清理。</p>
+      {running && <div className="media-progress"><div><span style={{ width: `${progress}%` }} /></div><strong>{completed} / {total} · {progress}%</strong><small>{currentLabel}</small></div>}
+      {message && <div className="admin-feedback">{message}</div>}
+      <button className="primary-button" onClick={() => void startMigration()} disabled={running || !candidates.length}>
+        <Sparkles size={17} />{running ? "正在逐张处理…" : candidates.length ? "开始优化现有图片" : "现有图片已全部优化"}
+      </button>
+    </section>
+  </div>;
+}
+
+function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManagePlans, onManagePhotos, onOptimizeMedia, onManageComments, onManageUsers, onNewStory, onEditStory }: { stats: AtlasStats; provinceCount: number; stories: AdminStoryRecord[]; onManageProvinces: () => void; onManagePlans: () => void; onManagePhotos: () => void; onOptimizeMedia: () => void; onManageComments: () => void; onManageUsers: () => void; onNewStory: () => void; onEditStory: (id: string) => void }) {
   const [userCount, setUserCount] = useState<number>();
   useEffect(() => {
     const task = window.setTimeout(async () => {
@@ -1074,11 +1229,11 @@ function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManageP
     <header className="page-header"><div><div className="eyebrow"><span />OWNER CONTROL</div><h1>管理后台</h1><p>欢迎回来，Yosuke。你的足迹仍在继续。</p></div><button className="primary-button" onClick={onNewStory}><Plus size={17} />发布新故事</button></header>
     <div className="admin-stats">{items.map(([label, value, Icon], index) => <div className="glass-panel" key={label}><div><Icon /><small>{label}</small></div><strong>{value}</strong><span>0{index + 1}</span></div>)}</div>
     <div className="admin-grid"><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">CONTENT</span><h2>最近内容</h2></div><span className="section-count">共 {stories.length} 篇</span></div>
-      {stories.map((story) => <div className="admin-story" key={story.id}>{story.coverUrl ? <img className="admin-story-cover" src={story.coverUrl} alt="" /> : <div className="mini-cover blue" />}<div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
+      {stories.map((story) => <div className="admin-story" key={story.id}>{story.coverUrl ? <img className="admin-story-cover" src={story.coverUrl} alt="" loading="lazy" decoding="async" /> : <div className="mini-cover blue" />}<div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
       {!stories.length && <div className="empty-state">还没有真实故事，创建第一篇旅行记录吧。</div>}
       <button className="admin-add" onClick={onNewStory}><Plus />创建新的旅行记录</button>
     </section><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">MODERATION</span><h2>内容管理</h2></div></div><p className="admin-section-copy">查看全站留言，处理不合适的文字和图片内容。</p><button className="text-button full" onClick={onManageComments}>进入留言审核 <ArrowRight /></button></section></div>
-    <section className="admin-actions"><button className="glass-panel" onClick={onManageProvinces}><MapPin /><div><strong>管理省份状态</strong><small>设置已去过、计划与未计划</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManagePlans}><Compass /><div><strong>计划目的地</strong><small>维护愿望清单、景点和预计时间</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManagePhotos}><Upload /><div><strong>照片资源库</strong><small>编辑说明、排序或删除现有照片</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManageUsers}><Users /><div><strong>用户与黑名单</strong><small>搜索、禁用或恢复用户</small></div><ChevronRight /></button></section>
+    <section className="admin-actions"><button className="glass-panel" onClick={onManageProvinces}><MapPin /><div><strong>管理省份状态</strong><small>设置已去过、计划与未计划</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManagePlans}><Compass /><div><strong>计划目的地</strong><small>维护愿望清单、景点和预计时间</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManagePhotos}><Upload /><div><strong>照片资源库</strong><small>编辑说明、排序或删除现有照片</small></div><ChevronRight /></button><button className="glass-panel" onClick={onOptimizeMedia}><Sparkles /><div><strong>图片流量优化</strong><small>压缩现有图片并安全替换引用</small></div><ChevronRight /></button><button className="glass-panel" onClick={onManageUsers}><Users /><div><strong>用户与黑名单</strong><small>搜索、禁用或恢复用户</small></div><ChevronRight /></button></section>
   </div>;
 }
 
@@ -1114,7 +1269,7 @@ export default function TravelAtlas() {
   }, []);
 
   const navigateView = useCallback((nextView: View, replace = false) => {
-    const paths: Record<View, string> = { map: "/map", wall: "/wall", notifications: "/notifications", profile: "/profile", admin: "/admin", "admin-provinces": "/admin/provinces", "admin-story-new": "/admin/stories/new", "admin-comments": "/admin/comments", "admin-users": "/admin/users", "admin-photos": "/admin/photos", "admin-plans": "/admin/plans" };
+    const paths: Record<View, string> = { map: "/map", wall: "/wall", notifications: "/notifications", profile: "/profile", admin: "/admin", "admin-provinces": "/admin/provinces", "admin-story-new": "/admin/stories/new", "admin-comments": "/admin/comments", "admin-users": "/admin/users", "admin-photos": "/admin/photos", "admin-plans": "/admin/plans", "admin-optimize": "/admin/optimize-media" };
     window.history[replace ? "replaceState" : "pushState"]({}, "", paths[nextView]);
     setView(nextView);
     setProvince(undefined); setStory(undefined); setSearchOpen(false);
@@ -1147,6 +1302,7 @@ export default function TravelAtlas() {
       else if (parts[1] === "users") setView("admin-users");
       else if (parts[1] === "photos") setView("admin-photos");
       else if (parts[1] === "plans") setView("admin-plans");
+      else if (parts[1] === "optimize-media") setView("admin-optimize");
       else if (parts[1] === "stories" && parts[2]) { setSelectedAdminStoryId(parts[2] === "new" ? undefined : parts[2]); setView("admin-story-new"); }
       else setView("admin");
       return;
@@ -1492,7 +1648,7 @@ export default function TravelAtlas() {
     if (view === "wall") return <WallPage user={user} />;
     if (view === "notifications") return <NotificationPage user={user} onNavigate={navigateUrl} onUnreadChange={setUnreadCount} />;
     if (view === "profile") return <ProfilePage user={user} onUpdated={refreshCurrentUser} onOpenNotifications={() => navigateView("notifications")} />;
-    if (view === "admin" && user.admin) return <AdminPage stats={stats} provinceCount={provinceOptions.length} stories={adminStories} onManageProvinces={() => navigateView("admin-provinces")} onManagePlans={() => navigateView("admin-plans")} onManagePhotos={() => navigateView("admin-photos")} onManageComments={() => navigateView("admin-comments")} onManageUsers={() => navigateView("admin-users")} onNewStory={() => { setSelectedAdminStoryId(undefined); navigateView("admin-story-new"); }} onEditStory={(id) => { setSelectedAdminStoryId(id); window.history.pushState({}, "", `/admin/stories/${id}`); setView("admin-story-new"); }} />;
+    if (view === "admin" && user.admin) return <AdminPage stats={stats} provinceCount={provinceOptions.length} stories={adminStories} onManageProvinces={() => navigateView("admin-provinces")} onManagePlans={() => navigateView("admin-plans")} onManagePhotos={() => navigateView("admin-photos")} onOptimizeMedia={() => navigateView("admin-optimize")} onManageComments={() => navigateView("admin-comments")} onManageUsers={() => navigateView("admin-users")} onNewStory={() => { setSelectedAdminStoryId(undefined); navigateView("admin-story-new"); }} onEditStory={(id) => { setSelectedAdminStoryId(id); window.history.pushState({}, "", `/admin/stories/${id}`); setView("admin-story-new"); }} />;
     if (view === "admin-provinces" && user.admin) return <ProvinceAdminPage key={Object.entries(statuses).sort(([left], [right]) => left.localeCompare(right)).map(([name, status]) => `${name}:${status}`).join("|")} statuses={statuses} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     if (view === "admin-story-new" && user.admin) {
       const selectedAdminStory = adminStories.find((item) => item.id === selectedAdminStoryId);
@@ -1505,6 +1661,7 @@ export default function TravelAtlas() {
     if (view === "admin-users" && user.admin) return <AdminUsersPage currentUserId={user.id} onBack={() => navigateView("admin")} />;
     if (view === "admin-photos" && user.admin) return <AdminPhotoLibraryPage key={adminPhotos.map((photo) => photo.id).join("|")} photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     if (view === "admin-plans" && user.admin) return <AdminPlansPage key={JSON.stringify(plans)} plans={Object.values(plans)} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
+    if (view === "admin-optimize" && user.admin) return <AdminMediaOptimizerPage stories={adminStories} photos={adminPhotos} onBack={() => navigateView("admin")} onUpdated={loadAtlasData} />;
     return <MapHome statuses={statuses} stats={stats} stories={publishedStories} usingDemoData={usingDemoData} onProvince={openProvince} onStory={openStory} onNavigate={navigateView} onSearch={openSearch} />;
   }, [adminPhotos, adminStories, atlasError, atlasReady, loadAtlasData, navigateUrl, navigateView, openProvince, openSearch, openStory, plans, provinceOptions, publishedStories, refreshCurrentUser, selectedAdminStoryId, stats, statuses, usingDemoData, view, user]);
   if (!authReady) return <main className="auth-loading"><Brand /><span>正在确认访问权限…</span></main>;
