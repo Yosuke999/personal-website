@@ -115,7 +115,7 @@ function AuthGate({ onEnter, initialMessage = "" }: { onEnter: (name: string, ad
       if (turnstileWidgetId.current) api.remove(turnstileWidgetId.current);
       turnstileWidgetId.current = undefined;
     };
-  }, [mode, turnstileReady, turnstileSiteKey]);
+  }, [turnstileReady, turnstileSiteKey]);
 
   function resetCaptcha() {
     setCaptchaToken("");
