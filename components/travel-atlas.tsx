@@ -1136,6 +1136,8 @@ function AdminMediaOptimizerPage({ stories, photos, onBack, onUpdated }: { stori
   const [total, setTotal] = useState(0);
   const [currentLabel, setCurrentLabel] = useState("");
   const [message, setMessage] = useState("");
+  const [cleanupBusy, setCleanupBusy] = useState(false);
+  const [cleanupPaths, setCleanupPaths] = useState<string[]>([]);
   const candidates = useMemo<MediaMigrationItem[]>(() => [
     ...stories
       .filter((story) => story.coverPath && !story.coverPath.toLowerCase().endsWith(".webp"))
@@ -1198,6 +1200,58 @@ function AdminMediaOptimizerPage({ stories, photos, onBack, onUpdated }: { stori
       : `迁移完成，共优化 ${candidates.length} 张图片。旧原图仍保留，确认页面正常后再清理。`);
   }
 
+  async function scanOldOriginals() {
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase) { setMessage("Supabase 尚未连接"); return; }
+    setCleanupBusy(true);
+    setCleanupPaths([]);
+    setMessage("");
+    const referenced = new Set([
+      ...stories.map((story) => story.coverPath).filter((path): path is string => Boolean(path)),
+      ...photos.map((photo) => photo.storagePath),
+    ]);
+    const oldPaths: string[] = [];
+    for (const story of stories) {
+      const { data, error } = await supabase.storage.from("travel-media").list(story.id, { limit: 1000 });
+      if (error) {
+        setMessage(`扫描旧原图失败：${error.message}`);
+        setCleanupBusy(false);
+        return;
+      }
+      for (const object of data || []) {
+        const path = `${story.id}/${object.name}`;
+        if (!referenced.has(path) && !path.toLowerCase().endsWith(".webp")) oldPaths.push(path);
+      }
+    }
+    setCleanupPaths(oldPaths);
+    setCleanupBusy(false);
+    setMessage(oldPaths.length
+      ? `已找到 ${oldPaths.length} 张未被任何故事引用的旧原图。再次点击下方按钮才会永久删除。`
+      : "没有发现可清理的未引用旧原图。");
+  }
+
+  async function deleteOldOriginals() {
+    const supabase = createSupabaseBrowserClient();
+    if (!supabase || !cleanupPaths.length) return;
+    setCleanupBusy(true);
+    setMessage("");
+    let deleted = 0;
+    for (let index = 0; index < cleanupPaths.length; index += 50) {
+      const batch = cleanupPaths.slice(index, index + 50);
+      const { error } = await supabase.storage.from("travel-media").remove(batch);
+      if (error) {
+        setMessage(`已删除 ${deleted} 张，后续清理失败：${error.message}。可重新扫描后继续。`);
+        setCleanupBusy(false);
+        setCleanupPaths([]);
+        return;
+      }
+      deleted += batch.length;
+    }
+    setCleanupPaths([]);
+    setCleanupBusy(false);
+    setMessage(`旧原图清理完成，共删除 ${deleted} 张未引用文件。当前 WebP 图片不受影响。`);
+  }
+
   const progress = total ? Math.round((completed / total) * 100) : 0;
   return <div className="page admin-page media-optimizer-page">
     <header className="page-header"><div><button className="back-link" onClick={onBack} disabled={running}><ArrowLeft size={16} />返回管理后台</button><div className="eyebrow"><span />MEDIA OPTIMIZER</div><h1>图片流量优化</h1><p>把现有封面和照片压缩为 WebP，降低 Supabase 流量消耗。</p></div></header>
@@ -1209,6 +1263,11 @@ function AdminMediaOptimizerPage({ stories, photos, onBack, onUpdated }: { stori
       <button className="primary-button" onClick={() => void startMigration()} disabled={running || !candidates.length}>
         <Sparkles size={17} />{running ? "正在逐张处理…" : candidates.length ? "开始优化现有图片" : "现有图片已全部优化"}
       </button>
+      {!running && !candidates.length && <div className="media-cleanup-actions">
+        {!cleanupPaths.length
+          ? <button className="text-button" onClick={() => void scanOldOriginals()} disabled={cleanupBusy}><Search size={16} />{cleanupBusy ? "正在扫描…" : "扫描未引用旧原图"}</button>
+          : <button className="danger-button" onClick={() => void deleteOldOriginals()} disabled={cleanupBusy}><Trash2 size={16} />{cleanupBusy ? "正在清理…" : `确认永久删除 ${cleanupPaths.length} 张旧原图`}</button>}
+      </div>}
     </section>
   </div>;
 }
