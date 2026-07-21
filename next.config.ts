@@ -6,8 +6,34 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 
 const nextConfig: NextConfig = {
   reactStrictMode: true,
+  images: {
+    qualities: [60, 65, 72, 75],
+    remotePatterns: [
+      {
+        protocol: "https",
+        hostname: "cjabfhiukpjhvmdgfzpn.supabase.co",
+        pathname: "/storage/v1/object/sign/**",
+      },
+    ],
+    minimumCacheTTL: 3600,
+  },
   turbopack: {
     root: projectRoot,
+  },
+  async redirects() {
+    return [
+      {
+        source: "/:path*",
+        has: [
+          {
+            type: "host",
+            value: "yosuke-travel-atlas.vercel.app",
+          },
+        ],
+        destination: "https://yosukegogogo.cn/:path*",
+        permanent: true,
+      },
+    ];
   },
   async rewrites() {
     return [

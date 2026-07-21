@@ -2,6 +2,7 @@
 /* eslint-disable @next/next/no-img-element -- local object URLs are used only for upload previews */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Image from "next/image";
 import Script from "next/script";
 import {
   ArrowDown, ArrowLeft, ArrowRight, ArrowUp, Bell, Camera, Check, ChevronLeft, ChevronRight, CircleUserRound,
@@ -26,8 +27,8 @@ type AdminStoryRecord = {
   pros: string[]; cons: string[]; isPublished: boolean;
 };
 type PendingPhoto = { file: File; preview: string; captionTitle: string; captionStory: string };
-type AtlasPhoto = { id: string; url: string; captionTitle: string; captionStory: string; sortOrder: number };
-type AdminPhotoRecord = AtlasPhoto & { storyId: string; storyTitle: string; storagePath: string };
+type AtlasPhoto = { id: string; storagePath: string; url?: string; captionTitle: string; captionStory: string; sortOrder: number };
+type AdminPhotoRecord = AtlasPhoto & { storyId: string; storyTitle: string };
 type AtlasStory = {
   id: string; province: string; city: string; title: string; date: string; excerpt: string;
   body: string; rating: number; verdict: string; pros: string[]; cons: string[];
@@ -54,6 +55,11 @@ const twoDigits = (value: number) => String(value).padStart(2, "0");
 const allowedImageTypes = new Set(["image/jpeg", "image/png", "image/webp"]);
 const isAllowedImage = (file: File) => allowedImageTypes.has(file.type);
 const immutableImageCache = "31536000";
+const supabaseSignedImagePrefix = "https://cjabfhiukpjhvmdgfzpn.supabase.co/storage/v1/object/sign/";
+const optimizedImageUrl = (url: string, width: 1200 | 1920 | 256 | 640, quality: 60 | 65 | 72 | 75) =>
+  url.startsWith(supabaseSignedImagePrefix)
+    ? `/_next/image?url=${encodeURIComponent(url)}&w=${width}&q=${quality}`
+    : url;
 
 type ImageOptimizationOptions = {
   maxWidth: number;
@@ -322,7 +328,7 @@ function Sidebar({ view, setView, name, avatarUrl, admin, unreadCount, onSearch,
       <Brand compact />
       <nav>{nav.map(([key, Icon, label]) => <button key={key} className={view === key ? "active" : ""} onClick={() => { setView(key); setOpen(false); }}><Icon size={19} /><span>{label}</span>{key === "notifications" && unreadCount > 0 && <i>{unreadCount > 99 ? "99+" : unreadCount}</i>}</button>)}<button onClick={() => { onSearch(); setOpen(false); }}><Search size={19} /><span>搜索</span></button></nav>
       {admin && <div className="admin-nav"><small>OWNER SPACE</small><button className={view.startsWith("admin") ? "active" : ""} onClick={() => { setView("admin"); setOpen(false); }}><LayoutDashboard size={19} /><span>管理后台</span></button></div>}
-      <div className="sidebar-user"><div className="avatar">{avatarUrl ? <img src={avatarUrl} alt="" /> : name.slice(0, 1).toUpperCase()}</div><div><strong>{name}</strong><small>{admin ? "地图主人" : "旅行朋友"}</small></div><button className="logout-button" onClick={onLogout} aria-label="退出登录" title="退出登录"><LogOut size={17} /><span>退出登录</span></button></div>
+      <div className="sidebar-user"><div className="avatar">{avatarUrl ? <img src={optimizedImageUrl(avatarUrl, 256, 60)} alt="" /> : name.slice(0, 1).toUpperCase()}</div><div><strong>{name}</strong><small>{admin ? "地图主人" : "旅行朋友"}</small></div><button className="logout-button" onClick={onLogout} aria-label="退出登录" title="退出登录"><LogOut size={17} /><span>退出登录</span></button></div>
     </aside>
     {open && <button aria-label="关闭菜单" className="sidebar-backdrop" onClick={() => setOpen(false)} />}
   </>;
@@ -330,7 +336,7 @@ function Sidebar({ view, setView, name, avatarUrl, admin, unreadCount, onSearch,
 
 function StoryCard({ story, onOpen }: { story: AtlasStory; onOpen: () => void }) {
   return <article className={`story-card story-${story.tone}`} role="button" tabIndex={0} onClick={onOpen} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") onOpen(); }}>
-    <div className="story-visual">{story.coverUrl && <img src={story.coverUrl} alt="" loading="lazy" decoding="async" />}<span>TRAVEL JOURNAL</span><MapPin size={22} /></div>
+    <div className="story-visual">{story.coverUrl && <Image src={story.coverUrl} alt="" fill sizes="(max-width: 760px) 100vw, 42vw" quality={65} />}<span>TRAVEL JOURNAL</span><MapPin size={22} /></div>
     <div className="story-card-body"><div className="story-meta"><span>{story.date}</span><span>{story.city}</span></div><h3>{story.title}</h3><p>{story.excerpt}</p><div className="story-card-footer"><div className="story-card-labels"><span className="story-verdict">{story.verdict}</span>{story.pros[0] && <span className="story-feature-tag">{story.pros[0]}</span>}</div><div className="story-card-stars" aria-label={`${story.rating} 星评分`}>{Array.from({ length: 5 }).map((_, i) => <Star key={i} size={13} fill={i < story.rating ? "currentColor" : "none"} />)}</div><button aria-label="查看故事"><ArrowRight size={17} /></button></div></div>
   </article>;
 }
@@ -373,7 +379,7 @@ function ProvincePanel({ province, status, plan, allStories, user, onClose, onSt
   const wishes = plan?.wishes || [];
   const photoCount = stories.reduce((total, item) => total + item.photos.length, 0);
   const averageRating = stories.length ? (stories.reduce((total, item) => total + item.rating, 0) / stories.length).toFixed(1) : "—";
-  return <div className="modal-shell"><button className="modal-backdrop" onClick={onClose} aria-label="关闭" /><section className="province-panel glass-panel" role="dialog" aria-modal="true" aria-label={`${shortProvince(province)}省份详情`} data-focus-layer tabIndex={-1}><button className="panel-close" onClick={onClose} aria-label="关闭省份详情"><X /></button><div className="province-hero"><small>{status === "visited" ? "VISITED PROVINCE" : "NEXT DESTINATION"}</small><h2>{shortProvince(province)}</h2><p>{status === "visited" ? "山川、街巷，以及那些只属于当时的风。" : "把想去的地方写下来，出发就有了方向。"}</p></div>{status === "visited" ? <><div className="panel-summary"><div><strong>{stories.length}</strong><small>旅行故事</small></div><div><strong>{photoCount}</strong><small>照片记录</small></div><div><strong>{averageRating}</strong><small>综合评分</small></div></div><div className="panel-content"><h3>旅行记录</h3>{stories.length ? stories.map((story) => <button className="panel-story" key={story.id} onClick={() => onStory(story.id)}>{story.coverUrl ? <img className="mini-cover-image" src={story.coverUrl} alt="" loading="lazy" decoding="async" /> : <div className={`mini-cover ${story.tone}`} />}<div><small>{story.date}</small><strong>{story.title}</strong><span>{story.city}</span></div><ChevronRight /></button>) : <div className="empty-state">该省份还没有已发布的故事</div>}<CommentComposer user={user} targetType="province" targetId={province} compact /></div></> : <div className="panel-content"><h3>旅行愿望清单</h3><div className="wish-list">{wishes.map((wish, index) => <div key={`${wish}-${index}`}><span>{twoDigits(index + 1)}</span><strong>{wish}</strong><Check size={15} /></div>)}{!wishes.length && <div className="empty-state">愿望清单还在酝酿中</div>}</div><div className="plan-time"><small>预计出行时间</small><strong>{plan?.expectedAt || "时间待定"}</strong></div><CommentComposer user={user} targetType="plan" targetId={province} compact title="朋友推荐区" /></div>}</section></div>;
+  return <div className="modal-shell"><button className="modal-backdrop" onClick={onClose} aria-label="关闭" /><section className="province-panel glass-panel" role="dialog" aria-modal="true" aria-label={`${shortProvince(province)}省份详情`} data-focus-layer tabIndex={-1}><button className="panel-close" onClick={onClose} aria-label="关闭省份详情"><X /></button><div className="province-hero"><small>{status === "visited" ? "VISITED PROVINCE" : "NEXT DESTINATION"}</small><h2>{shortProvince(province)}</h2><p>{status === "visited" ? "山川、街巷，以及那些只属于当时的风。" : "把想去的地方写下来，出发就有了方向。"}</p></div>{status === "visited" ? <><div className="panel-summary"><div><strong>{stories.length}</strong><small>旅行故事</small></div><div><strong>{photoCount}</strong><small>照片记录</small></div><div><strong>{averageRating}</strong><small>综合评分</small></div></div><div className="panel-content"><h3>旅行记录</h3>{stories.length ? stories.map((story) => <button className="panel-story" key={story.id} onClick={() => onStory(story.id)}>{story.coverUrl ? <Image className="mini-cover-image" src={story.coverUrl} alt="" width={68} height={58} sizes="68px" quality={60} /> : <div className={`mini-cover ${story.tone}`} />}<div><small>{story.date}</small><strong>{story.title}</strong><span>{story.city}</span></div><ChevronRight /></button>) : <div className="empty-state">该省份还没有已发布的故事</div>}<CommentComposer user={user} targetType="province" targetId={province} compact /></div></> : <div className="panel-content"><h3>旅行愿望清单</h3><div className="wish-list">{wishes.map((wish, index) => <div key={`${wish}-${index}`}><span>{twoDigits(index + 1)}</span><strong>{wish}</strong><Check size={15} /></div>)}{!wishes.length && <div className="empty-state">愿望清单还在酝酿中</div>}</div><div className="plan-time"><small>预计出行时间</small><strong>{plan?.expectedAt || "时间待定"}</strong></div><CommentComposer user={user} targetType="plan" targetId={province} compact title="朋友推荐区" /></div>}</section></div>;
 }
 
 function StoryDetail({ id, stories, user, onClose }: { id: string; stories: AtlasStory[]; user: AppUser; onClose: () => void }) {
@@ -383,7 +389,40 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
   const [showBackToTop, setShowBackToTop] = useState(false);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
   const [shareMessage, setShareMessage] = useState("");
+  const [resolvedPhotos, setResolvedPhotos] = useState<AtlasPhoto[]>(() => story?.photos || []);
+  const [photosLoading, setPhotosLoading] = useState(() => Boolean(story?.photos.some((photo) => !photo.url && photo.storagePath)));
+  const displayPhotos = useMemo(
+    () => resolvedPhotos.filter((photo): photo is AtlasPhoto & { url: string } => Boolean(photo.url)),
+    [resolvedPhotos],
+  );
   const touchStartX = useRef<number | null>(null);
+
+  useEffect(() => {
+    if (!story) return;
+    let cancelled = false;
+    const missing = story.photos.filter((photo) => !photo.url && photo.storagePath);
+    queueMicrotask(() => {
+      if (cancelled) return;
+      setLightboxIndex(null);
+      setResolvedPhotos(story.photos);
+      setPhotosLoading(missing.length > 0);
+    });
+    if (!missing.length) return;
+    const loadPhotos = async () => {
+      const supabase = createSupabaseBrowserClient();
+      if (!supabase) {
+        if (!cancelled) setPhotosLoading(false);
+        return;
+      }
+      const { data } = await supabase.storage.from("travel-media").createSignedUrls(missing.map((photo) => photo.storagePath), 60 * 60);
+      if (cancelled) return;
+      const urls = new globalThis.Map((data || []).filter((item) => item.path && item.signedUrl).map((item) => [item.path!, item.signedUrl!]));
+      setResolvedPhotos(story.photos.map((photo) => ({ ...photo, url: photo.url || urls.get(photo.storagePath) })));
+      setPhotosLoading(false);
+    };
+    void loadPhotos();
+    return () => { cancelled = true; };
+  }, [story]);
 
   const closeLightbox = useCallback(() => {
     const closingIndex = lightboxIndex;
@@ -393,13 +432,13 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
     }
   }, [lightboxIndex]);
   const showPreviousPhoto = useCallback(() => {
-    if (!story?.photos.length) return;
-    setLightboxIndex((current) => current === null ? 0 : (current - 1 + story.photos.length) % story.photos.length);
-  }, [story]);
+    if (!displayPhotos.length) return;
+    setLightboxIndex((current) => current === null ? 0 : (current - 1 + displayPhotos.length) % displayPhotos.length);
+  }, [displayPhotos.length]);
   const showNextPhoto = useCallback(() => {
-    if (!story?.photos.length) return;
-    setLightboxIndex((current) => current === null ? 0 : (current + 1) % story.photos.length);
-  }, [story]);
+    if (!displayPhotos.length) return;
+    setLightboxIndex((current) => current === null ? 0 : (current + 1) % displayPhotos.length);
+  }, [displayPhotos.length]);
 
   useEffect(() => {
     if (lightboxIndex === null) return;
@@ -438,7 +477,7 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
   };
 
   if (!story) return null;
-  const activePhoto = lightboxIndex === null ? null : story.photos[lightboxIndex];
+  const activePhoto = lightboxIndex === null ? null : displayPhotos[lightboxIndex];
   return <div className="story-overlay" ref={overlayRef} onScroll={handleStoryScroll}>
     <div className="story-progress" aria-hidden="true"><span style={{ width: `${scrollProgress}%` }} /></div>
     <nav className="story-toolbar" aria-label="故事工具栏">
@@ -446,12 +485,13 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
       <button onClick={() => void shareStory()} aria-label="分享故事"><Share2 /><span>分享</span></button>
     </nav>
     {shareMessage && <div className="story-toast" role="status">{shareMessage}</div>}
-    <div className={`story-hero-large story-${story.tone}`}>{story.coverUrl && <img className="story-hero-image" src={story.coverUrl} alt="" />}<div className="hero-mountain mountain-one" /><div className="hero-mountain mountain-two" /><div className="story-title-block"><div className="eyebrow"><span />{story.city}</div><h1>{story.title}</h1><p>{story.date}</p></div><span className="scroll-hint">SCROLL TO EXPLORE <i /></span></div>
+    <div className={`story-hero-large story-${story.tone}`}>{story.coverUrl && <Image className="story-hero-image" src={story.coverUrl} alt="" fill sizes="100vw" quality={72} priority />}<div className="hero-mountain mountain-one" /><div className="hero-mountain mountain-two" /><div className="story-title-block"><div className="eyebrow"><span />{story.city}</div><h1>{story.title}</h1><p>{story.date}</p></div><span className="scroll-hint">SCROLL TO EXPLORE <i /></span></div>
     <article className="story-article">
       <div className="story-lead"><span>01</span><p>{story.body}</p></div>
-      {story.photos.length > 0 && <section className="photo-story-list">{story.photos.map((photo, index) => <article className="photo-story-entry" key={photo.id}>
+      {photosLoading && <div className="story-photo-loading" role="status"><span />正在加载照片故事…</div>}
+      {displayPhotos.length > 0 && <section className="photo-story-list">{displayPhotos.map((photo, index) => <article className="photo-story-entry" key={photo.id}>
         <button className="story-photo-button" onClick={() => setLightboxIndex(index)} aria-label={`放大查看第 ${index + 1} 张照片`}>
-          <img src={photo.url} alt={photo.captionTitle || `旅行照片 ${index + 1}`} loading="lazy" decoding="async" />
+          <img src={optimizedImageUrl(photo.url, 1200, 72)} alt={photo.captionTitle || `旅行照片 ${index + 1}`} loading="lazy" decoding="async" />
           <span>查看大图</span>
         </button>
         <div><small>PHOTO STORY · {twoDigits(index + 1)}</small>{photo.captionTitle && <h3>{photo.captionTitle}</h3>}{photo.captionStory && <p>{photo.captionStory}</p>}</div>
@@ -461,7 +501,7 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
       <CommentComposer user={user} targetType="story" targetId={story.id} title="故事评论" />
     </article>
     {showBackToTop && <button className="story-to-top" onClick={() => overlayRef.current?.scrollTo({ top: 0, behavior: "smooth" })} aria-label="返回故事顶部"><ArrowUp /><span>顶部</span></button>}
-    {activePhoto && <div className="story-lightbox" data-focus-layer role="dialog" aria-modal="true" aria-label={`照片 ${lightboxIndex! + 1}，共 ${story.photos.length} 张`}>
+    {activePhoto?.url && <div className="story-lightbox" data-focus-layer role="dialog" aria-modal="true" aria-label={`照片 ${lightboxIndex! + 1}，共 ${displayPhotos.length} 张`}>
       <button className="story-lightbox-backdrop" onClick={closeLightbox} aria-label="关闭照片浏览" />
       <div className="story-lightbox-stage" onTouchStart={(event) => { touchStartX.current = event.touches[0]?.clientX ?? null; }} onTouchEnd={(event) => {
         if (touchStartX.current === null) return;
@@ -472,11 +512,11 @@ function StoryDetail({ id, stories, user, onClose }: { id: string; stories: Atla
         }
         touchStartX.current = null;
       }}>
-        <img src={activePhoto.url} alt={activePhoto.captionTitle || `旅行照片 ${lightboxIndex! + 1}`} />
+        <img src={optimizedImageUrl(activePhoto.url, 1920, 75)} alt={activePhoto.captionTitle || `旅行照片 ${lightboxIndex! + 1}`} />
         {(activePhoto.captionTitle || activePhoto.captionStory) && <div className="story-lightbox-caption">{activePhoto.captionTitle && <strong>{activePhoto.captionTitle}</strong>}{activePhoto.captionStory && <p>{activePhoto.captionStory}</p>}</div>}
       </div>
-      <div className="story-lightbox-top"><span>{twoDigits(lightboxIndex! + 1)} / {twoDigits(story.photos.length)}</span><button onClick={closeLightbox} aria-label="关闭照片浏览"><X /></button></div>
-      {story.photos.length > 1 && <><button className="story-lightbox-arrow story-lightbox-previous" onClick={showPreviousPhoto} aria-label="上一张照片"><ChevronLeft /></button><button className="story-lightbox-arrow story-lightbox-next" onClick={showNextPhoto} aria-label="下一张照片"><ChevronRight /></button></>}
+      <div className="story-lightbox-top"><span>{twoDigits(lightboxIndex! + 1)} / {twoDigits(displayPhotos.length)}</span><button onClick={closeLightbox} aria-label="关闭照片浏览"><X /></button></div>
+      {displayPhotos.length > 1 && <><button className="story-lightbox-arrow story-lightbox-previous" onClick={showPreviousPhoto} aria-label="上一张照片"><ChevronLeft /></button><button className="story-lightbox-arrow story-lightbox-next" onClick={showNextPhoto} aria-label="下一张照片"><ChevronRight /></button></>}
     </div>}
   </div>;
 }
@@ -561,7 +601,7 @@ function CommentComposer({ user, targetType, targetId, compact = false, title = 
     await loadComments();
   }
 
-  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={comment.avatarUrl} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={image.url} alt="留言图片" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy || imageLimitReached}><ImagePlus size={17} />图片 <small>{selectedImageCount}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
+  return <section className={`comments ${compact ? "comments-compact" : ""}`}><div className="comments-heading"><div><MessageCircle size={19} /><h3>{title}</h3></div><span>{comments.length} 条</span></div><div className="comment-list">{loading && <div className="empty-state">正在读取留言…</div>}{!loading && !comments.length && <div className="empty-state">还没有留言，来写第一条吧。</div>}{comments.map((comment) => <div className={`comment ${comment.parentId ? "comment-reply" : ""}`} key={comment.id}><div className="avatar small">{comment.avatarUrl ? <img src={optimizedImageUrl(comment.avatarUrl, 256, 60)} alt="" /> : comment.authorName.slice(0, 1)}</div><div><strong>{comment.authorName} <small>{new Date(comment.createdAt).toLocaleString("zh-CN")}</small></strong><p>{comment.body}</p>{comment.images.length > 0 && <div className="comment-images">{comment.images.map((image) => <img key={image.id} src={optimizedImageUrl(image.url, 640, 65)} alt="留言图片" loading="lazy" decoding="async" />)}</div>}<button onClick={() => setReplyTo(comment)}>回复</button></div></div>)}</div><div className="comment-box">{replyTo && <div className="reply-indicator">回复 {replyTo.authorName}<button onClick={() => setReplyTo(undefined)}><X size={13} /></button></div>}<textarea value={text} onChange={(event) => setText(event.target.value)} placeholder="写下你的想法…" rows={compact ? 2 : 3} />{files.length > 0 && <div className="upload-previews">{files.map((item) => <img key={item.preview} src={item.preview} alt="待上传预览" />)}</div>}{message && <div className="comment-message" role="status">{message}</div>}<div><input ref={fileRef} hidden type="file" accept="image/png,image/jpeg,image/webp" multiple onChange={(event) => void chooseFiles(event.target.files)} /><button onClick={() => fileRef.current?.click()} disabled={busy || imageLimitReached}><ImagePlus size={17} />图片 <small>{selectedImageCount}/2</small></button><button className="send-button" onClick={() => void send()} disabled={busy}><Send size={16} />{busy ? "发送中…" : "发送"}</button></div></div></section>;
 }
 
 function StoryLikeButton({ storyId, userId }: { storyId: string; userId?: string }) {
@@ -707,7 +747,7 @@ function ProfilePage({ user, onUpdated, onOpenNotifications }: { user: AppUser; 
   }
 
   return <div className="page narrow-page"><header className="page-header"><div><div className="eyebrow"><span />YOUR SPACE</div><h1>个人中心</h1></div></header>
-    <section className="profile-card glass-panel"><div className="profile-cover"><div className="avatar profile-avatar">{avatarPreview ? <img src={avatarPreview} alt="个人头像" /> : name[0]}</div><button onClick={() => avatarRef.current?.click()} disabled={busy}><Camera size={16} />更换头像</button><input ref={avatarRef} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadAvatar(event.target.files?.[0])} /></div><div className="profile-body"><label>昵称<input value={name} maxLength={32} onChange={(event) => setName(event.target.value)} /></label><label>邮箱<input value={user.email} readOnly /><small>邮箱不会在网站中公开</small></label><button className="primary-button" onClick={() => void saveProfile()} disabled={busy}>{busy ? "保存中…" : "保存资料"}</button></div></section>
+    <section className="profile-card glass-panel"><div className="profile-cover"><div className="avatar profile-avatar">{avatarPreview ? <img src={optimizedImageUrl(avatarPreview, 256, 60)} alt="个人头像" /> : name[0]}</div><button onClick={() => avatarRef.current?.click()} disabled={busy}><Camera size={16} />更换头像</button><input ref={avatarRef} hidden type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => void uploadAvatar(event.target.files?.[0])} /></div><div className="profile-body"><label>昵称<input value={name} maxLength={32} onChange={(event) => setName(event.target.value)} /></label><label>邮箱<input value={user.email} readOnly /><small>邮箱不会在网站中公开</small></label><button className="primary-button" onClick={() => void saveProfile()} disabled={busy}>{busy ? "保存中…" : "保存资料"}</button></div></section>
     {message && <div className="profile-message" role="status">{message}</div>}
     <section className="settings-list glass-panel"><button onClick={() => setShowPassword((current) => !current)}><LockKeyhole /><div><strong>修改密码</strong><small>使用当前登录会话更新密码</small></div><ChevronRight /></button>{showPassword && <div className="inline-settings-form"><label>新密码<input type="password" minLength={6} value={password} onChange={(event) => setPassword(event.target.value)} /></label><label>确认新密码<input type="password" minLength={6} value={confirmPassword} onChange={(event) => setConfirmPassword(event.target.value)} /></label><button className="primary-button" onClick={() => void changePassword()} disabled={busy}>确认修改</button></div>}<button onClick={() => void loadComments()}><MessageCircle /><div><strong>我的留言</strong><small>查看和删除自己发表的内容</small></div><ChevronRight /></button>{showComments && <div className="my-comments">{comments.map((comment) => <article key={comment.id}><div><small>{comment.target_type} · {new Date(comment.created_at).toLocaleDateString("zh-CN")}</small><p>{comment.body}</p></div><button onClick={() => void deleteComment(comment.id)} aria-label="删除留言"><Trash2 size={16} /></button></article>)}{!comments.length && <div className="empty-state">你还没有发表过留言</div>}</div>}<button onClick={onOpenNotifications}><Bell /><div><strong>通知中心</strong><small>查看回复、评论和故事点赞</small></div><ChevronRight /></button></section>
   </div>;
@@ -1056,6 +1096,7 @@ function AdminPlansPage({ plans, onBack, onUpdated }: { plans: ProvincePlan[]; o
 
 function AdminPhotoLibraryPage({ photos, onBack, onUpdated }: { photos: AdminPhotoRecord[]; onBack: () => void; onUpdated: () => Promise<void> }) {
   const [items, setItems] = useState(photos);
+  const [imagesLoading, setImagesLoading] = useState(() => photos.some((photo) => !photo.url && photo.storagePath));
   const [query, setQuery] = useState("");
   const [storyFilter, setStoryFilter] = useState("all");
   const [busyId, setBusyId] = useState<string>();
@@ -1066,6 +1107,26 @@ function AdminPhotoLibraryPage({ photos, onBack, onUpdated }: { photos: AdminPho
     const keyword = query.trim().toLowerCase();
     return items.filter((photo) => (storyFilter === "all" || photo.storyId === storyFilter) && (!keyword || `${photo.storyTitle} ${photo.captionTitle} ${photo.captionStory}`.toLowerCase().includes(keyword)));
   }, [items, query, storyFilter]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const missing = photos.filter((photo) => !photo.url && photo.storagePath);
+    if (!missing.length) return;
+    const loadImages = async () => {
+      const supabase = createSupabaseBrowserClient();
+      if (!supabase) {
+        if (!cancelled) setImagesLoading(false);
+        return;
+      }
+      const { data } = await supabase.storage.from("travel-media").createSignedUrls(missing.map((photo) => photo.storagePath), 60 * 60);
+      if (cancelled) return;
+      const urls = new globalThis.Map((data || []).filter((item) => item.path && item.signedUrl).map((item) => [item.path!, item.signedUrl!]));
+      setItems(photos.map((photo) => ({ ...photo, url: photo.url || urls.get(photo.storagePath) })));
+      setImagesLoading(false);
+    };
+    void loadImages();
+    return () => { cancelled = true; };
+  }, [photos]);
 
   function changeField(id: string, field: "captionTitle" | "captionStory", value: string) {
     setItems((current) => current.map((photo) => photo.id === id ? { ...photo, [field]: value } : photo));
@@ -1118,10 +1179,11 @@ function AdminPhotoLibraryPage({ photos, onBack, onUpdated }: { photos: AdminPho
   return <div className="page admin-page photo-library-page"><header className="page-header"><div><button className="back-link" onClick={onBack}><ArrowLeft size={16} />返回管理后台</button><div className="eyebrow"><span />MEDIA LIBRARY</div><h1>照片资源库</h1><p>编辑照片说明、调整同一故事内的展示顺序，或永久删除照片。</p></div></header>
     <section className="photo-library-toolbar glass-panel"><label><Search /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="搜索故事或照片说明" /></label><select value={storyFilter} onChange={(event) => setStoryFilter(event.target.value)}><option value="all">全部故事</option>{stories.map(([id, title]) => <option value={id} key={id}>{title}</option>)}</select><span>共 {items.length} 张</span></section>
     {message && <div className="admin-feedback">{message}</div>}
+    {imagesLoading && <div className="admin-feedback" role="status">正在加载照片缩略图…</div>}
     <section className="photo-library-list">{visible.map((photo) => {
       const siblings = items.filter((item) => item.storyId === photo.storyId).sort((a, b) => a.sortOrder - b.sortOrder);
       const position = siblings.findIndex((item) => item.id === photo.id);
-      return <article className="photo-admin-card glass-panel" key={photo.id}><img src={photo.url} alt={photo.captionTitle || photo.storyTitle} loading="lazy" decoding="async" /><div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id} aria-label="保存照片说明"><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
+      return <article className="photo-admin-card glass-panel" key={photo.id}>{photo.url ? <img src={optimizedImageUrl(photo.url, 640, 60)} alt={photo.captionTitle || photo.storyTitle} loading="lazy" decoding="async" /> : <div className="photo-admin-placeholder" aria-hidden="true" />}<div className="photo-admin-fields"><small>{photo.storyTitle} · 第 {position + 1} / {siblings.length} 张</small><label>照片标题<input value={photo.captionTitle} onChange={(event) => changeField(photo.id, "captionTitle", event.target.value)} placeholder="为照片添加标题" /></label><label>照片故事<textarea value={photo.captionStory} onChange={(event) => changeField(photo.id, "captionStory", event.target.value)} rows={3} placeholder="记录照片背后的故事" /></label></div><div className="photo-admin-actions"><button onClick={() => void movePhoto(photo, -1)} disabled={busyId === photo.id || position === 0} aria-label="向前移动"><ArrowUp /></button><button onClick={() => void movePhoto(photo, 1)} disabled={busyId === photo.id || position === siblings.length - 1} aria-label="向后移动"><ArrowDown /></button><button className="save" onClick={() => void savePhoto(photo)} disabled={busyId === photo.id} aria-label="保存照片说明"><Save /></button><button className={confirmId === photo.id ? "delete confirmed" : "delete"} onClick={() => void removePhoto(photo)} disabled={busyId === photo.id} aria-label="删除照片"><Trash2 /></button></div></article>;
     })}{!visible.length && <div className="empty-state glass-panel">{items.length ? "没有符合条件的照片" : "目前还没有上传照片"}</div>}</section>
   </div>;
 }
@@ -1288,7 +1350,7 @@ function AdminPage({ stats, provinceCount, stories, onManageProvinces, onManageP
     <header className="page-header"><div><div className="eyebrow"><span />OWNER CONTROL</div><h1>管理后台</h1><p>欢迎回来，Yosuke。你的足迹仍在继续。</p></div><button className="primary-button" onClick={onNewStory}><Plus size={17} />发布新故事</button></header>
     <div className="admin-stats">{items.map(([label, value, Icon], index) => <div className="glass-panel" key={label}><div><Icon /><small>{label}</small></div><strong>{value}</strong><span>0{index + 1}</span></div>)}</div>
     <div className="admin-grid"><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">CONTENT</span><h2>最近内容</h2></div><span className="section-count">共 {stories.length} 篇</span></div>
-      {stories.map((story) => <div className="admin-story" key={story.id}>{story.coverUrl ? <img className="admin-story-cover" src={story.coverUrl} alt="" loading="lazy" decoding="async" /> : <div className="mini-cover blue" />}<div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
+      {stories.map((story) => <div className="admin-story" key={story.id}>{story.coverUrl ? <img className="admin-story-cover" src={optimizedImageUrl(story.coverUrl, 256, 60)} alt="" loading="lazy" decoding="async" /> : <div className="mini-cover blue" />}<div><strong>{story.title}</strong><span>{story.provinceName} · {story.traveledAt}</span></div><span className="status-pill">{story.isPublished ? "已发布" : "草稿"}</span><button onClick={() => onEditStory(story.id)} title="编辑故事"><Settings2 /></button></div>)}
       {!stories.length && <div className="empty-state">还没有真实故事，创建第一篇旅行记录吧。</div>}
       <button className="admin-add" onClick={onNewStory}><Plus />创建新的旅行记录</button>
     </section><section className="glass-panel admin-section"><div className="section-heading"><div><span className="section-index">MODERATION</span><h2>内容管理</h2></div></div><p className="admin-section-copy">查看全站留言，处理不合适的文字和图片内容。</p><button className="text-button full" onClick={onManageComments}>进入留言审核 <ArrowRight /></button></section></div>
@@ -1547,10 +1609,9 @@ export default function TravelAtlas() {
       cons: item.cons || [],
       isPublished: item.is_published,
     }));
-    const mediaPaths = Array.from(new Set([
-      ...nextAdminStories.map((item) => item.coverPath).filter((path): path is string => Boolean(path)),
-      ...(photoResult.data || []).map((photo) => photo.storage_path),
-    ]));
+    const mediaPaths = Array.from(new Set(
+      nextAdminStories.map((item) => item.coverPath).filter((path): path is string => Boolean(path)),
+    ));
     const signedUrlByPath: Record<string, string> = {};
     if (mediaPaths.length) {
       const { data: signedMedia } = await supabase.storage.from("travel-media").createSignedUrls(mediaPaths, 60 * 60);
@@ -1566,11 +1627,10 @@ export default function TravelAtlas() {
       storyId: photo.story_id,
       storyTitle: storyTitleById[photo.story_id] || "未命名故事",
       storagePath: photo.storage_path,
-      url: signedUrlByPath[photo.storage_path] || "",
       captionTitle: photo.caption_title || "",
       captionStory: photo.caption_story || "",
       sortOrder: photo.sort_order,
-    })).filter((photo) => Boolean(photo.url)));
+    })));
     const verdictLabel = { worth_it: "值得去", depends: "因人而异", not_recommended: "不推荐" } as const;
     setPublishedStories(nextAdminStories.filter((item) => item.isPublished).map((item, index) => ({
       id: item.id,
@@ -1586,7 +1646,7 @@ export default function TravelAtlas() {
       cons: item.cons,
       tone: index % 2 === 0 ? "blue" : "amber",
       coverUrl: item.coverPath ? signedUrlByPath[item.coverPath] : undefined,
-      photos: (photoResult.data || []).filter((photo) => photo.story_id === item.id).map((photo) => ({ id: photo.id, url: signedUrlByPath[photo.storage_path] || "", captionTitle: photo.caption_title || "", captionStory: photo.caption_story || "", sortOrder: photo.sort_order })).filter((photo) => Boolean(photo.url)),
+      photos: (photoResult.data || []).filter((photo) => photo.story_id === item.id).map((photo) => ({ id: photo.id, storagePath: photo.storage_path, captionTitle: photo.caption_title || "", captionStory: photo.caption_story || "", sortOrder: photo.sort_order })),
     })));
     setStats({
       visited: provinceResult.data.filter((item) => item.status === "visited").length,

@@ -9,6 +9,10 @@ export const metadata: Metadata = {
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {
   return (
     <html lang="zh-CN">
+      <head>
+        <link rel="preconnect" href="https://cjabfhiukpjhvmdgfzpn.supabase.co" crossOrigin="anonymous" />
+        <link rel="dns-prefetch" href="https://cjabfhiukpjhvmdgfzpn.supabase.co" />
+      </head>
       <body>{children}</body>
     </html>
   );
